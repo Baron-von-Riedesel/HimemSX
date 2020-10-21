@@ -1,7 +1,7 @@
 
   1. About
 
-  HimemSX is a fork of HimemX. It's main feature is that it's able to manage
+  HimemSX is a fork of HimemX. Its main feature is that it's able to manage
   more than 4 GB of memory. The memory beyond the 4 GB limit is called
   "super-extended" in this document.
 

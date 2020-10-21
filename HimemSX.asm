@@ -374,10 +374,6 @@ gdt_size equ $ - offset gdt_start
 data32sel   equ 08h
 data16sel   equ 10h
 
-dst3239 db 0
-src3239 db 0
-	align 4
-
 xms_highest_addr dd 10FFFFh
 xms_handle_table XMS_HANDLETABLE <0fdh, size XMS_HANDLE, 0, 0>
 
@@ -1219,7 +1215,7 @@ xms_get_move_addr proc
 	shr esi,22
 	and si,si
 	jz @F
-	mov bx,offset rmcopysx	;switch to pm with paging
+	mov bp,offset rmcopysx	;switch to pm with paging
 @@:
 	add eax,edx 		; add offset into block
 	adc si,0
@@ -1264,13 +1260,14 @@ endif
 	push ecx
 	push edx
 	push eax
+	push bp
 	push bx
 
 	mov ecx,es:[si].xms_move.len	; get length
 	test cl,1						; is it even?
 	jnz @@move_invalid_length
 
-	mov bx,offset rmcopy		; default: switch to pm w/o paging
+	mov bp,offset rmcopy		; default: switch to pm w/o paging
 
 	push si
 	mov edx,es:[si].xms_move.dest_offset
@@ -1280,14 +1277,14 @@ endif
 	pop si
 	jc @@copy_dest_is_wrong
 	mov edi,eax 		; store in destination index
-	mov dst3239,dl
+	mov bl,dl
 
 	mov edx,es:[si].xms_move.src_offset
 	mov si,es:[si].xms_move.src_handle
 	call xms_get_move_addr			; get move address
 	jc @@copy_source_is_wrong
 	xchg eax,esi
-	mov src3239,al
+	mov bh,al
 
 ;**************************************************
 ; setup finished with
@@ -1301,7 +1298,7 @@ endif
 	or ecx,ecx 				; nothing to do ??
 	jz @@xms_exit_copy
 
-	cmp bx,offset rmcopysx	; at least one block beyond 4GB?
+	cmp bp,offset rmcopysx	; at least one block beyond 4GB?
 	jz @@move_ok_to_start	; then don't check for overlap
 
 	cmp esi,edi 			; nothing to do ??
@@ -1332,10 +1329,10 @@ endif
 ;--- VCPI - way too complicated. So we exit with error. However, it
 ;--- should be possible to add an API for Jemm386 to make this task
 ;--- simple.
-	cmp bx,offset rmcopysx
+	cmp bp,offset rmcopysx
 	jz @@copy_invalid_handle
 
-	mov bx,offset pmcopy		; yes, use INT 15h, ah=87h
+	mov bp,offset pmcopy		; yes, use INT 15h, ah=87h
 	push ss						; set ES for int 15h, ah=87h call
 	pop es
 @@:
@@ -1349,13 +1346,14 @@ endif
 @@:
 	sub edx,ecx
 	push edx
-	call bx
+	call bp
 	pop edx
 	jc @@move_a20_failure
 	and edx, edx
 	jnz @@copy_loop
 @@xms_exit_copy:
 	pop bx
+	pop bp
 	pop eax
 	pop edx
 	pop ecx
@@ -1391,12 +1389,12 @@ endif
 							; common error exit routine
 @@xms_exit_copy_failure:
 	pop ax
+	pop bp
 	mov bh,ah				; restore BH only, preserve BL
 	pop eax
 	pop edx
 	pop ecx
 	ret
-
 
 ;------------------------------------------------------------
 ; "real-mode" copy proc
@@ -1555,6 +1553,14 @@ endif
 	ret
 
 ;--- copy in pm with 32-bit paging and 4 MB pages
+;--- EDI: bits 0-31 of destination
+;--- ESI: bits 0-31 of source
+;--- BL: bits 32-39 of destination
+;--- BH: bits 32-39 of source
+;--- ECX: bytes to copy
+
+PAGEDIR equ 110000h
+
 rmcopysx::
 	pushf
 	cli 					; no interrupts when doing protected mode
@@ -1570,8 +1576,6 @@ rmcopysx::
 	or al,10h		;enable PSE
 	mov cr4,eax
 	.386p
-
-PAGEDIR equ 110000h
 
 	mov eax,PAGEDIR
 	mov cr3,eax
@@ -1589,7 +1593,8 @@ PAGEDIR equ 110000h
 	assume ds:FLAT
 
 	mov dword ptr ds:[PAGEDIR+0],83h	;set 4MB page, writable, present
-	movzx eax,cs:[dst3239]
+
+	movzx eax,bl
 	shl eax,13
 	mov edx,edi
 	and edx,0ffc00000h
@@ -1600,7 +1605,8 @@ PAGEDIR equ 110000h
 	mov dword ptr ds:[PAGEDIR+4],eax    ;dst
 	lea eax,[eax+400000h]
 	mov dword ptr ds:[PAGEDIR+8],eax    ;dst
-	movzx eax,cs:[src3239]
+
+	movzx eax,bh
 	shl eax,13
 	mov edx,esi
 	and edx,0ffc00000h
@@ -1620,12 +1626,11 @@ PAGEDIR equ 110000h
 	rep movs @dword [edi],[esi]
 	adc cx,cx
 	rep movs @word [edi],[esi]	 ; move a trailing WORD
-
+if 1 ; may be disabled
 	mov dx,data16sel		; restore selector attributes to 64 kB
 	mov ds,dx
 	mov es,dx
-	assume ds:DGROUP
-
+endif
 	mov eax,cr0
 	and eax,7ffffffeh
 	mov cr0,eax
@@ -1634,15 +1639,16 @@ PAGEDIR equ 110000h
 	pop edi
 	pop esi
 	add edi,ecx
-	adc cs:[dst3239],0
+	adc bl,0
 	add esi,ecx
-	adc cs:[src3239],0
-
+	adc bh,0
 	popf
 	clc
 	ret
 
 xms_move_emb endp 
+
+	assume ds:DGROUP
 
 ;******************************************************************************
 ; locks an EMB
