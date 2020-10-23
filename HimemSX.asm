@@ -11,7 +11,7 @@ ifndef NUMHANDLES
 NUMHANDLES      equ 48      ;std 48, default number of handles
 endif
 ALLOWDISABLEA20 equ 1       ;std 1, 1=allow to disable A20
-BLOCKSIZE       equ 2000h   ;std 2000h, block size moved to/from ext. memory
+BLOCKSIZE       equ 2000h   ;std 2000h, block size moved to/from ext. memory (max is 65535!)
 USEUNREAL       equ 1       ;std 1, 1=use "unreal" mode for EMB copy
 PREF66LGDT      equ 0       ;std 0, 1=use 66h prefix for LGDT
 ?LOG            equ 0       ;std 0, 1=enable /LOG option
@@ -19,7 +19,8 @@ PREF66LGDT      equ 0       ;std 0, 1=use 66h prefix for LGDT
 ifndef ?ALTSTRAT
 ?ALTSTRAT       equ 0       ;std 0, 1=use alternate strategie for (re)alloc emb
 endif
-?MERGE0HDL      equ 1       ;std 0, 1=try to merge even if handle to free has size 0
+?MERGE0HDL      equ 1       ;std 1, 1=try to merge even if handle to free has size 0
+?HINF_MSCOMP    equ 1       ;std 1, 1=func. 0Eh (get handle info) MS Himem compatible 
 
 ;MAXFREEKB      equ 0FBC0h
 MAXFREEKB       equ 0FFFFh  ;std FFFFh, xms v2.0 max ext. memory
@@ -590,7 +591,7 @@ xms_get_version endp
 ; requests HMA
 ; In:   AH=1
 ;   DX=space needed in HMA (0ffffh if application tries to request HMA)
-; Out:  AX=1 if successful
+; Out:  AX=1 if successful, BL=0 (MS Himem compatible)
 ;   AX=0 if not successful
 ;     BL=80h -> function not implemented (implemented here ;) )
 ;     BL=81h -> VDISK is detected
@@ -616,7 +617,7 @@ xms_request_hma endp
 ;******************************************************************************
 ; releases HMA
 ; In:   AH=2
-; Out:  AX=1 if successful
+; Out:  AX=1 if successful, BL=0 (MS Himem compatible)
 ;   AX=0 if not successful
 ;     BL=80h -> function not implemented
 ;     BL=81h -> VDISK is detected
@@ -1427,7 +1428,7 @@ endif
 	mov ds,dx
 	mov es,dx
 
-	shr ecx,2				; get number of DWORDS to move
+	shr cx,2				; get number of DWORDS to move
 	rep movs @dword [edi],[esi]
 	adc cx,cx
 	rep movs @word [edi],[esi]	 ; move a trailing WORD
@@ -1452,7 +1453,7 @@ else
 	xor dx,dx				; exited by an interrupt routine.
 	mov ds,dx
 	mov es,dx
-	shr ecx,2				; get number of DWORDS to move
+	shr cx,2				; get number of DWORDS to move
 	rep movs @dword [edi],[esi]
 	adc cx,cx
 	rep movs @word [edi],[esi]	 ; move a trailing WORD
@@ -1560,6 +1561,8 @@ endif
 ;--- ECX: bytes to copy
 
 PAGEDIR equ 110000h
+DSTBASE equ 400000h*1
+SRCBASE equ 400000h*3
 
 rmcopysx::
 	pushf
@@ -1567,7 +1570,7 @@ rmcopysx::
 	lgdt fword ptr cs:[gdt32]; load GDTR (use CS prefix here)
 	mov eax,cr0
 	mov dx,data32sel
-	inc ax					; set PE bit
+	inc ax			;set PE bit
 	mov cr0,eax
 	mov ds,dx
 	mov es,dx
@@ -1579,7 +1582,8 @@ rmcopysx::
 
 	mov eax,PAGEDIR
 	mov cr3,eax
-;--- 4 MP page directory entries:
+
+;--- 4 MB page directory entries:
 ;--- bit 7: 1=4MB page
 ;--- bit 12: PAT
 ;--- bit 13-20: addressbits 32-39
@@ -1588,46 +1592,52 @@ rmcopysx::
 
 	push esi
 	push edi
-	push ecx
+	push cx
 
 	assume ds:FLAT
 
-	mov dword ptr ds:[PAGEDIR+0],83h	;set 4MB page, writable, present
+	mov dword ptr [eax+0],83h			;set 4MB page, writable, present
 
 	movzx eax,bl
-	shl eax,13
 	mov edx,edi
-	and edx,0ffc00000h
-	or eax, edx
+	shl eax,13							;dst bits 32-39 -> 13-20
+	and edx,0ffc00000h					;dst bits 22-31
 	and edi,3fffffh
-	add edi,400000h*1
-	mov al,83h
-	mov dword ptr ds:[PAGEDIR+4],eax    ;dst
-	lea eax,[eax+400000h]
-	mov dword ptr ds:[PAGEDIR+8],eax    ;dst
+	add edi,DSTBASE
+	or eax, edx
+	mov al,83h							;dst 4MB page, writable, present
+	mov ds:[PAGEDIR+4],eax
+	add eax,1 shl 22
+	jnc @F								;4 GB boundary crossed?
+	add eax,1 shl 13
+@@:
+	mov ds:[PAGEDIR+8],eax
 
 	movzx eax,bh
-	shl eax,13
 	mov edx,esi
-	and edx,0ffc00000h
-	or eax, edx
+	shl eax,13							;src bits 32-39 -> 13-20
+	and edx,0ffc00000h					;src bits 22-31
 	and esi,3fffffh
-	add esi,400000h*3
-	mov al,83h
-	mov dword ptr ds:[PAGEDIR+12],eax   ;src
-	lea eax,[eax+400000h]
-	mov dword ptr ds:[PAGEDIR+16],eax   ;src
+	add esi,SRCBASE
+	or eax, edx
+	mov al,81h							;src 4MB page, present
+	mov ds:[PAGEDIR+12],eax
+	add eax,1 shl 22
+	jnc @F								;4 GB boundary crossed?
+	add eax,1 shl 13
+@@:
+	mov ds:[PAGEDIR+16],eax
 
 	mov eax,cr0
 	bts eax,31
 	mov cr0,eax
 
-	shr ecx,2				; get number of DWORDS to move
+	shr cx,2					; get number of DWORDS to move
 	rep movs @dword [edi],[esi]
 	adc cx,cx
-	rep movs @word [edi],[esi]	 ; move a trailing WORD
+	rep movs @word [edi],[esi]	; move a trailing WORD
 if 1 ; may be disabled
-	mov dx,data16sel		; restore selector attributes to 64 kB
+	mov dx,data16sel			; restore selector attributes to 64 kB
 	mov ds,dx
 	mov es,dx
 endif
@@ -1635,7 +1645,7 @@ endif
 	and eax,7ffffffeh
 	mov cr0,eax
 
-	pop ecx
+	pop cx
 	pop edi
 	pop esi
 	add edi,ecx
@@ -1705,7 +1715,7 @@ xms_sext_lock_emb proc
 
 	@DbgOutS <"xms_sext_lock_emb enter",13,10>
 	call xms_check_handle_ex	; check if dx holds "used" handle
-	inc [si].XMS_HANDLE.xh_locks   ; increase lock counter
+	inc [si].XMS_HANDLE.xh_locks; increase lock counter
 	jz @@lock_error
 	mov ebx,[si].XMS_HANDLE.xh_baseK
 	mov edx,ebx
@@ -1796,15 +1806,24 @@ xms_get_handle_info proc
 	jz @@get_handle_info_err
 
 	cmp ch,0					; bl = min(cx,0xff)
-	jz @@handle_count_ok
+	jz @F
 	mov cl,0ffh
-@@handle_count_ok:
+@@:
 	mov bl,cl
 
+;--- MS Himem: if size > 0xffff, return error BL=A2h
+if ?HINF_MSCOMP
+	cmp edx,010000h				; dx must be <= 0xffff
+	jc @F
+	mov bl,XMS_INVALID_HANDLE
+	dec ax
+	jmp @@get_handle_info_err
+else
 	cmp edx,010000h				; dx = min(edx,0xffff);
-	jb @@handle_size_ok
+	jb @F
 	mov dx,0ffffh
-@@handle_size_ok:
+endif
+@@:
 
 @@get_handle_info_err:
 
