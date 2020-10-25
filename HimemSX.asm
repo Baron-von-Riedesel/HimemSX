@@ -1203,7 +1203,7 @@ xms_get_move_addr proc
 	xor bx,bx
 	mov eax,ecx 		; contains length
 	add eax,edx 		; assert length + offset < size    
-	adc bx,0
+	adc bx,bx
 	add eax,1024-1		; round up to kB
 	adc bx,0
 	shrd eax,ebx,10		; convert to kB units
@@ -1287,35 +1287,39 @@ endif
 ;   BH.ESI = source A00-A39
 ;   BL.EDI = destination A00-A39
 ;   ECX = number of words to move
-;
-; now we must check for potential overlap
 ;**************************************************
 
 	or ecx,ecx 				; nothing to do ??
 	jz @@xms_exit_copy
 
 	mov bp,offset rmcopysx	; switch to pm with paging
-	cmp bl,bh				; check bits 32-39
-	jnz @@move_ok_to_start	; if different, no overlap check needed (a bit too optimistic!)
-	cmp bl,0
+	and bx,bx
 	jnz @F
 	mov bp,offset rmcopy    ; both blocks < 4GB, no PSE-36 paging needed
 @@:
-	cmp esi,edi 			; nothing to do ??
-	jz @@xms_exit_copy
 
-; if source is greater than destination, it's ok
-; ( at least if the BIOS, too, does it with CLD)
+; overlap test. start of destination block (BL.EDI)
+; must either be <= start of source block (BH.ESI) 
+; or  >= start of source block + block length (BH.ESI+ECX)
 
+; 1. check if BL.EDI <= BH.ESI
+	cmp bl,bh
+	jb @@move_ok_to_start
+	ja @F
+	cmp edi,esi
+	jbe @@move_ok_to_start
+@@:
+; calculate source + block length: DL.EAX = BH.ESI + ECX
+	mov dl,bh
+	mov eax, esi
+	add eax, ecx
+	adc dl,0
+; 2. check if BL.EDI >= DL.EAX
+	cmp bl,dl
 	ja @@move_ok_to_start
-
-; no, it's less
-; if (source + length > destination)
-;    return ERROR_OVERLAP
-
-	lea edx, [esi+ecx]
-	cmp edx, edi
-	ja @@move_invalid_overlap
+	jb @@move_invalid_overlap
+	cmp edi,eax
+	jb @@move_invalid_overlap
 
 @@move_ok_to_start:
 	SMSW AX 					; don't use priviledged "mov eax,cr0"!

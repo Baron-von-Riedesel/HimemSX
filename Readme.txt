@@ -14,7 +14,7 @@
            in kB, in EDX the total amount (in kB) of free super-extended memory.
            AX=0 indicates an error.
   
-  AH=0C9h: allocate block of super-extended memory. Expects in EDX the 
+  AH=0C9h: allocate block of super-extended memory. Expects in EDX the
            requested amount of memory in kB. Returns AX=0 if an error occured,
            else AX is 1 and the handle of the block is in DX.
 
@@ -42,6 +42,10 @@
   - The 'move extended memory' function 0Bh understands 32-bit offsets only.
     So if a memory block is larger than 4 GB, you can't use this function to
     copy memory beyond a 4 GB offset.
+  - if no super-extended memory is found, or the CPU doesn't support PSE-36
+    paging, HimemSX will still load and behave like a v3 XMM. However, it
+    searches for extended memory via Int 15h, ax=e820h only, without trying to
+    fall back to older detection strategies if this call fails.
 
 
   4. License
