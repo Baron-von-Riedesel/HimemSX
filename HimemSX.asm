@@ -216,14 +216,15 @@ _DATA segment
 
 ;--- variables
 
-request_ptr				DD 0       ; pointer to request header
-xms_mem_free			DD 0       ; size of XMS in kbytes
-_xms_max				DD 4095*1024 ; value /MAX= parameter
+request_ptr				DD 0		; pointer to request header
+xms_mem_free			DD 0		; size of XMS in kbytes
+_xms_max				DD 4095*1024; value /MAX= parameter
+dwMaxHigh				dd -1		; mask for upper memory address limit   
 _xms_num_handles		DW NUMHANDLES ;value /NUMHANDLES= parameter
-_method					DB -1      ; value /METHOD: parameter
-_startup_verbose		DB 00H     ; value /VERBOSE parameter
+_method					DB -1		; value /METHOD: parameter
+_startup_verbose		DB 00H		; value /VERBOSE parameter
 if ?LOG
-_xms_logging_enabled	DB 00H     ; value /LOG parameter
+_xms_logging_enabled	DB 00H		; value /LOG parameter
 endif
 hma_exists				db 0
 
@@ -274,8 +275,6 @@ MsgUnknownA20	db 'No Supported A20 method detected',0dh,lf,'$'
 
 old_dos 		db 'XMS needs at least DOS version 3.00.$'
 xms_twice		db 'XMS is already installed.$'
-no_cpuid 		db "CPU doesn't support CPUID opcode.$"
-no_pse36 		db "CPU doesn't support PSE-36.$"
 a20_error		db 'Unable to switch A20 address line.$'
 vdisk_detected	db 'VDISK has been detected.$'
 no_386			db 'At least a 80386 is required.$'
@@ -1194,19 +1193,21 @@ xms_get_move_addr proc
 	jc @@wrong_size 	; negative length might wrap
 	cmp edx,10fff0h
 	ja @@wrong_size
-	xor si,si
+	clc
 	ret
 
 @@is_emb:               ; it's a handle:offset pair
 	call xms_check_handle	;check if si holds a "used" handle
 
+	push bx
+	xor bx,bx
 	mov eax,ecx 		; contains length
 	add eax,edx 		; assert length + offset < size    
-	jc @@wrong_size		; probably negative length
-	add eax,1024-1		;
-	jc @@wrong_size		; probably negative length
-
-	shr eax,10			; convert to kB units
+	adc bx,0
+	add eax,1024-1		; round up to kB
+	adc bx,0
+	shrd eax,ebx,10		; convert to kB units
+	pop bx
 	cmp eax,[si].XMS_HANDLE.xh_sizeK	; compare with max offset
 	ja @@wrong_size
 
@@ -1214,10 +1215,6 @@ xms_get_move_addr proc
 	mov esi,eax 		; store in source index
 	shl eax,10			; convert from kb to linear
 	shr esi,22
-	and si,si
-	jz @F
-	mov bp,offset rmcopysx	;switch to pm with paging
-@@:
 	add eax,edx 		; add offset into block
 	adc si,0
 	ret
@@ -1268,17 +1265,15 @@ endif
 	test cl,1						; is it even?
 	jnz @@move_invalid_length
 
-	mov bp,offset rmcopy		; default: switch to pm w/o paging
-
 	push si
 	mov edx,es:[si].xms_move.dest_offset
 	mov si,es:[si].xms_move.dest_handle
 	call xms_get_move_addr			; get move address
-	mov dx,si
+	mov dx,si ;save lines 32-39 in DX, since BL must be preserved
 	pop si
 	jc @@copy_dest_is_wrong
+	mov bx,dx
 	mov edi,eax 		; store in destination index
-	mov bl,dl
 
 	mov edx,es:[si].xms_move.src_offset
 	mov si,es:[si].xms_move.src_handle
@@ -1289,8 +1284,8 @@ endif
 
 ;**************************************************
 ; setup finished with
-;   ESI = source
-;   EDI = destination
+;   BH.ESI = source A00-A39
+;   BL.EDI = destination A00-A39
 ;   ECX = number of words to move
 ;
 ; now we must check for potential overlap
@@ -1299,19 +1294,21 @@ endif
 	or ecx,ecx 				; nothing to do ??
 	jz @@xms_exit_copy
 
-	cmp bp,offset rmcopysx	; at least one block beyond 4GB?
-	jz @@move_ok_to_start	; then don't check for overlap
-
+	mov bp,offset rmcopysx	; switch to pm with paging
+	cmp bl,bh				; check bits 32-39
+	jnz @@move_ok_to_start	; if different, no overlap check needed (a bit too optimistic!)
+	cmp bl,0
+	jnz @F
+	mov bp,offset rmcopy    ; both blocks < 4GB, no PSE-36 paging needed
+@@:
 	cmp esi,edi 			; nothing to do ??
 	jz @@xms_exit_copy
 
-;
 ; if source is greater than destination, it's ok
 ; ( at least if the BIOS, too, does it with CLD)
 
 	ja @@move_ok_to_start
 
-;
 ; no, it's less
 ; if (source + length > destination)
 ;    return ERROR_OVERLAP
@@ -1330,8 +1327,8 @@ endif
 ;--- VCPI - way too complicated. So we exit with error. However, it
 ;--- should be possible to add an API for Jemm386 to make this task
 ;--- simple.
-	cmp bp,offset rmcopysx
-	jz @@copy_invalid_handle
+	cmp bx,0
+	jnz @@copy_invalid_handle
 
 	mov bp,offset pmcopy		; yes, use INT 15h, ah=87h
 	push ss						; set ES for int 15h, ah=87h call
@@ -3806,16 +3803,18 @@ e820_nextitem:   ; ebx offset is updated with each successive int 15h
 	lea di, mmap
 	xor eax,eax
 	mov mmap.baselow,eax   ; insurance against buggy BIOS
+	mov mmap.basehigh,eax
 	mov mmap.lenlow,eax
+	mov mmap.lenhigh,eax
 	mov mmap.type_,eax
 	mov ax,0e820h
 	clc
 	int 15h
-	setc dl 		; keep carry flag status
+	setc dl 			; keep carry flag status
 	cmp eax,SMAP
-	jne e820_bad	; failure
+	jne e820_bad		; failure
 	cmp dl,1
-	je e820_done ; CF doesn't have to signal fail, can just mean done
+	je e820_done		; CF doesn't have to signal fail, can just mean done
 
 	cmp ecx,sizeof E820MAP	; didn't return all the info needed, assume done
 	jb e820_done
@@ -3827,16 +3826,30 @@ e820_nextitem:   ; ebx offset is updated with each successive int 15h
 	mov eax, mmap.basehigh
 	cmp eax,0			; memory beyond 4 GB?
 	jnz @F
-	cmp edx, 100000h ; has to live in extended memory
+	cmp edx, 100000h	; has to live in extended memory
 	jb e820_itemdone
 @@:
+	test eax, dwMaxHigh	;block start beyond 4GB/1TB?
+	jnz e820_itemdone
 	shrd edx, eax, 10
 	mov ecx, mmap.lenlow
 	mov eax, mmap.lenhigh
+	test eax, dwMaxHigh	;block size > 4GB/1TB?
+	jnz e820_itemdone
 	shrd ecx, eax, 10
+	mov eax, edx
+	add eax, ecx		;block crossing 4TB (XMS v3 limit)?
+	jc @F
+	dec eax
+	test eax, 0C0000000h;block crossing 1TB barrier (PSE-36 limit)?
+	jz e820_itemok
+@@:
+	mov ecx, 0C0000000h	;truncate the block to ensure it fits in the first TB 
+	sub ecx, edx
+e820_itemok:
 	call seti15handle	;set xms block, sizeK in ECX, baseK in EDX
 e820_itemdone:
-	cmp ebx,0		;was this the last entry?
+	cmp ebx,0			;was this the last entry?
 	jnz e820_nextitem
 e820_bad:
 e820_done:
@@ -3888,7 +3901,7 @@ initialize proc
 	cmp al,3h			; we need at least 3.00
 	jnc @@dosok
 	mov dx,offset old_dos
-@@error_exit:           ; error msgs old_dos, xms_twice, no_cpuid, no_pse36, a20_error, vdisk_detected
+@@error_exit:           ; error msgs old_dos, xms_twice, a20_error, vdisk_detected
 	call dispmsg
 	mov dx,offset error_msg
 	mov ah,9
@@ -3903,21 +3916,21 @@ initialize proc
 	mov dx,offset xms_twice
 	je @@error_exit
 
+	call DoCommandline		; parse commandline
+
+;--- now DS=DGROUP
+
 	call hascpuid
-	mov dx,offset no_cpuid
-	jc @@error_exit
+	jc @F
 	xor eax,eax
 	inc eax
 	.586
 	cpuid
 	.386
 	bt edx,16
-	mov dx,offset no_pse36
-	jnc @@error_exit
-
-	call DoCommandline		; parse commandline
-
-;--- now DS=DGROUP
+	jnc @F
+	mov byte ptr dwMaxHigh,0; allow memory up to 000000ff.ffffffffh   
+@@:
 
 	@DbgOutS <"initialize: processing selected A20 method",13,10>
 
@@ -3928,7 +3941,6 @@ initialize proc
 	call _install_check_vdisk	; is VDISK installed?
 	mov dx,offset vdisk_detected
 	jz @@error_exit
-
 
 	mov ax,cs				; setup descriptors
 ;	 mov [code_seg],ax		; eliminate relocation entry
@@ -3976,7 +3988,7 @@ endif
 
 	@DbgOutS <"initialize: init handle array",13,10>
 
-	call geti15mem				; look for extended memory via int 15h
+	call geti15mem				; look for extended memory via int 15h, ax=e820h
 	cmp hma_exists,1
 	mov dx,offset xms_toosmall
 	jnz @@error_exit
