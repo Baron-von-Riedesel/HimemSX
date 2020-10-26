@@ -1,7 +1,14 @@
 
   History
 
-  21.10.2020, v3.50:
-
-  - first version.
+  26.10.2020:
+  - fixed: cpuid check for PSE-36 used bit 16 instead of bit 17.
+  25.10.2020:
+  - block move overlap check works for entire 40-bit address space.
+  25.10.2020:
+  - ensured that no memory beyond the 1 TB barrier is used.
+  23.10.2020:
+  - fixed: block move crossing a 4 GB barrier may have lost data.
+  21.10.2020:
+  - initial version.
 

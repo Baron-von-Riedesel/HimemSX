@@ -30,6 +30,8 @@ MAXFREEKB       equ 0FFFFh  ;std FFFFh, xms v2.0 max ext. memory
 EXECMODE_SYS    equ 0       ;binary has been loaded as device
 EXECMODE_EXE    equ 1       ;binary has been loaded as .EXE
 
+CPUID1_PSE36    equ 17
+
 XMS_START       equ 1024+64 ; XMS starts at 1088k after HMA
 
 CMD_INIT        equ 0       ; init command (used when installed)
@@ -3931,7 +3933,7 @@ initialize proc
 	.586
 	cpuid
 	.386
-	bt edx,16
+	bt edx,CPUID1_PSE36
 	jnc @F
 	mov byte ptr dwMaxHigh,0; allow memory up to 000000ff.ffffffffh   
 @@:

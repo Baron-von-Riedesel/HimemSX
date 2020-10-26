@@ -8,6 +8,14 @@
 
   2. Technical Details
   
+  To access extended memory below the 4 GB barrier HimemSX uses the so-called
+  "unreal" mode, like most other XMMs.
+
+  Memory beyond the 4 GB barrier can only be accessed thru special paging
+  mechanisms. HimemSX uses the PSE-36 variant. PSE stands for Page Size
+  Extension, the 36 refers to the original 36 bit address extension (64 GB),
+  which was later extended to 40 bit (1 TB).
+
   HimemSX adds a few functions to the standard XMS v3 API:
   
   AH=0C8h: query free super-extended memory. Returns in EAX largest free block
