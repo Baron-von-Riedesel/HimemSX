@@ -36,6 +36,12 @@
   Int 15h, ax=E820h is intercepted and any memory block beyond the 4 GB
   barrier, which is marked as "available", will be changed to "reserved".
 
+  In V86 mode, XMS function 0Bh ('move extended memory') needs to call the
+  Expanded Memory Manager's (EMM) emulation of Int 15h, ah=87h, since the move
+  needs to execute privileged code, which isn't possible in v86. The only
+  EMM that currently supports to access memory beyond 4 GB is Jemm386 v5.80+.
+  The Int 15h, ah=87h API has been exhanced for this functionality.
+
 
   3. Restrictions
 
@@ -43,10 +49,6 @@
     physical address lines). However, since HimemSX currently uses 32-bit 
     paging with PSE-36 inside its block-move function, the effective limit
     is 1 TB (40 address lines).
-  - The 'move extended memory' function 0Bh will fail if cpu is in v86-mode
-    and source or destination address is beyond 4 GB. Currently HimemSX is
-    intended for real-mode only. It's planned to extend Jemm386 so that
-    HimemSX's function 0Bh will fully work together with Jemm386 in the future.
   - The 'move extended memory' function 0Bh understands 32-bit offsets only.
     So if a memory block is larger than 4 GB, you can't use this function to
     copy memory beyond a 4 GB offset.

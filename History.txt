@@ -3,6 +3,11 @@
 
   26.10.2020:
   - fixed: cpuid check for PSE-36 used bit 16 instead of bit 17.
+  - cleaned source (use prototypes & invoke)
+  - added option /SUPERMAX=xxx.
+  - removed option /NOX2MAX32.
+  - block move function in V86 mode supports memory beyond 4GB
+    if the EMM is Jemm386 v5.80+.
   25.10.2020:
   - block move overlap check works for entire 40-bit address space.
   25.10.2020:

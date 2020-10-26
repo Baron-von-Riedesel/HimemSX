@@ -195,7 +195,7 @@ IRETS ends
 _RTEXT segment dword public 'CODE'	; resident code+data
 _RTEXT ends
 
-_TEXT segment byte public 'CODE'	; nonresident code
+_TEXT segment word public 'CODE'	; nonresident code
 _TEXT ends
 
 _DATA segment word public 'DATA'	; nonresident data
@@ -219,8 +219,8 @@ _DATA segment
 ;--- variables
 
 request_ptr				DD 0		; pointer to request header
-xms_mem_free			DD 0		; size of XMS in kbytes
-_xms_max				DD 4095*1024; value /MAX= parameter
+xms_max					DD 4095*1024; value /MAX= parameter
+xms_smax				DD 1023*4096*1024; value /SUPERMAX= parameter
 dwMaxHigh				dd -1		; mask for upper memory address limit   
 _xms_num_handles		DW NUMHANDLES ;value /NUMHANDLES= parameter
 _method					DB -1		; value /METHOD: parameter
@@ -234,9 +234,6 @@ hma_exists				db 0
 
 szStartup   	DB 'HimemSX ', VERSIONSTR, ' [', @CatStr(!"%@Date!"), ']',lf
 				db 'Portions (c) Till Gerken & tom ehlert.',  lf,  00H
-szQuestion		DB '/?',  00H
-szCannot		DB 'Option /? cannot be used as a device driver.',  lf, 'Please'
-				DB ' run HimemSX /? from the commandline',  00H
 if ?TESTMEM
 szTESTMEMOFF	DB '/TESTMEM:OFF',  00H
 endif
@@ -246,20 +243,18 @@ szLOG			DB '/LOG',  00H
 endif
 szINTERFACE		DB 'Interface : XMS ',VERSIONSTR,' 80686 1T ',  lf,  00H
 szNUMHANDLES	DB '/NUMHANDLES=',  00H
-szSelNumHandles	DB 'selected num_handles=%d',  lf,  00H
-szNumHandlesLim1	DB 'HimemSX: NUMHANDLES must be >= 8, corrected',  lf,  00H
-szNumHandlesLim2	DB 'HimemSX: NUMHANDLES must be <= 128, corrected',  lf,  00H
+szSelNumHandles	DB 'No of XMS handles: %u',  lf,  00H
+szNumHandlesLim1	DB 'HimemSX: NUMHANDLES must be >= 8, corrected',  lf, 7, 00H
+szNumHandlesLim2	DB 'HimemSX: NUMHANDLES must be <= 128, corrected',  lf, 7, 00H
 szX2MAX32		DB '/X2MAX32',  00H
-szNOX2MAX32		DB '/NOX2MAX32',  00H
 szMETHOD		DB '/METHOD:',  00H
 szMAX			DB '/MAX=',  00H
-szMaximum		DB 'Maximum XMS: %luK',  lf,  00H
+szSUPERMAX		DB '/SUPERMAX=',  00H
+szMaximum		DB 'Maximum extended memory: %luK',  lf,  00H
 szHMAMIN		DB '/HMAMIN=',  00H
 szMinimum		DB 'Minimum HMA that has to be requested: %uK',  lf,  00H
-szHMAMAX		DB 'HimemSX: HMAMIN must be <= 63, corrected',  lf,  00H
-szINT151		DB '/INT15=',  00H
-szINT152		DB 'HimemSX: /INT15=%x - not implemented',  07H,  lf,  00H
-szignored		DB 'ignored commandline <%s>',  lf,  00H
+szHMAMAX		DB 'HimemSX: HMAMIN must be <= 63, corrected',  lf,  7, 00H
+szIgnored		DB 'Ignored commandline <%s>',  lf,  7, 00H
 ;cant_disable_message db 'Can',27h,'t disable A20 - ignored',lf,'$'
 
 dHimem			db 'HimemSX: $'
@@ -294,12 +289,12 @@ methods label byte
 	db 0
 
 if ?TESTMEM
-?TMSTR equ <" [/TESTMEM:ON|OFF]">
+?TMSTR equ <" /TESTMEM:ON|OFF">
 else
 ?TMSTR equ <" ">
 endif
 if ?LOG
-?LGSTR equ <" [/LOG]">
+?LGSTR equ <" /LOG">
 else
 ?LGSTR equ <" ">
 endif
@@ -308,9 +303,12 @@ szHello label byte
 	db "Extended memory host for DOS (coordinates the usage of XMS and HMA)",10
 	db "HimemSX is a device driver that is loaded in CONFIG.SYS.",10
 	db "Please place DEVICE=HIMEMSX.EXE [options] before any driver using XMS.",10,10
-	db "options: [/MAX=####] [/METHOD:xxx] [/HMAMIN=n] [/NUMHANDLES=m]",10
-	db ?TMSTR," [/VERBOSE]",?LGSTR,10,10
-	db "  /MAX=#####      limit memory controlled by XMM to #####K.",10
+	db "options: /MAX=### /METHOD:xxx /HMAMIN=n /NUMHANDLES=m /V /X2MAX32 /SUPERMAX=###",10
+if ?TESTMEM or ?LOG
+	db ?TMSTR,?LGSTR,10
+endif
+	db 10
+	db "  /MAX=###        limit memory controlled by XMM to ###K.",10
 	db "                  The HMA is not affected by this value, it's always included",10
 	db "  /METHOD:xxx     Specifies the method to be used for A20 handling.",10
 	db "                  Possible values for xxx:",10
@@ -322,12 +320,12 @@ szHello label byte
 	db "                  PORT92      Use port 92h always",10
 	db "  /HMAMIN=n       Specifies minimum number of Kbs of HMA that a program",10
 	db "                  must request to gain access to the HMA (default: 0Kb)",10
-	db "  /NOX2MAX32      No limit for XMS 2.0 free/avail. memory reports (default)",10
 	db "  /NUMHANDLES=m   Specifies number of XMS handles available (def: 48)",10
 if ?TESTMEM
 	db "  /TESTMEM:ON|OFF Performs or skips an extended memory test (def: OFF)",10
 endif
-	db "  /VERBOSE        Gives extra information",10 
+	db "  /SUPERMAX=###   limit super-extended memory controlled by XMM to ###K.",10
+	db "  /V              Gives extra information",10 
 	db "  /X2MAX32        Limit XMS 2.0 free/avail. memory report to 32M-1K",10
 if ?LOG
 	db "  /LOG            Logs the driver activity to the screen",10
@@ -1327,15 +1325,8 @@ endif
 	SMSW AX 					; don't use priviledged "mov eax,cr0"!
 	test al,1					; are we already in PM?
 	jz @F
-
-;--- is one block beyond 4 GB?
-;--- in v86-mode, accessing memory beyond 4GB would require to use
-;--- VCPI - way too complicated. So we exit with error. However, it
-;--- should be possible to add an API for Jemm386 to make this task
-;--- simple.
-	cmp bx,0
-	jnz @@copy_invalid_handle
-
+;	cmp bx,0
+;	jnz @@copy_invalid_handle
 	mov bp,offset pmcopy		; yes, use INT 15h, ah=87h
 	push ss						; set ES for int 15h, ah=87h call
 	pop es
@@ -1539,19 +1530,28 @@ pmcopy:
 	lea si,[esp+2]
 	shr cx,1		; convert to words
 
+;--- is super-extended memory involved?
+	push bx
+	and bx,bx
+	jz @F
+;--- then the extended Int15h, ah=87h API must be set
+;---  CX = F00Fh
+;---  HiWord(ECX) = size in words
+;---  Hiword(EAX) = F00Fh
+;---  DX = src bits 32-47
+;---  BX = dst bits 32-47
+;---  ES:SI -> GDT similar as in standard Int 15, ah=87h
+	shl ecx,16
+	mov cx,0F00Fh
+	mov ax,cx
+	shl eax,16
+	movzx dx,bh
+	movzx bx,bl
+@@:
 	clc
-;--- using IVT vector is slightly faster, but incompatible with Windows
-if 0
-	push ds
-	mov ds,ax
-	mov ah,87h
-	pushf
-	call dword ptr ds:[15h*4]
-	pop ds
-else
 	mov ah,87h
 	int 15h
-endif
+	pop bx
 	pop si
 	lea sp,[esp+6*8];don't modify flags!
 	ret
@@ -2942,6 +2942,9 @@ DoCommandline proc
 
 DoCommandline endp
 
+printf proto c :ptr, :vararg
+ParseCmdLine proto c :word, :ptr
+
 ;*********************************************
 ; startpoint when executing as EXE
 ;*********************************************
@@ -2967,11 +2970,8 @@ start proc
 	push es
 	pop ds
 	mov _startup_verbose,1
-	push sp
-	push EXECMODE_EXE
-	call ParseCmdLine
-	push offset szHello
-	call _printf
+	invoke ParseCmdLine, EXECMODE_EXE, sp
+	invoke printf, offset szHello
 nota386:
 	mov ah,04ch
 	int 21h
@@ -2994,16 +2994,10 @@ handle_char proc
 handle_char endp
 
 ;--- get the A20 method ("/METHOD:xxx")
-;--- int _stdcall GetA20Method(char * pszMethod)
 
-_GetA20Method proc
+GetA20Method proc stdcall uses si di pszMethod:ptr
 
-	pop cx
-	pop ax	;get the pszMethod parameter
-	push cx
-	push si
-	push di
-	mov si,ax
+	mov si,pszMethod
 	mov di,offset methods
 	xor bx,bx
 	push ds
@@ -3038,31 +3032,17 @@ _GetA20Method proc
 	jnz @@nextchar2
 @@done:
 	mov ax,bx
-	pop di
-	pop	si
 	ret
 
-_GetA20Method endp
+GetA20Method endp
 
 ;--- convert long to string
-;--- _stdcall ltob(long num, char * psz, int base);
 
-_ltob proc
-
-num  equ <bp+4>
-psz  equ <bp+8>
-base equ <bp+10>
-
-;	register si = p
-
-	push bp
-	mov bp,sp
-	push edi
-	push si
+ltob proc stdcall uses edi si num:dword, psz:ptr, base:word
 
 	mov ch,0
-	movzx edi,@word [base]
-	mov eax,[num]
+	movzx edi,base
+	mov eax,num
 	cmp di,-10
 	jne @@ispositive
 	mov di,10
@@ -3071,7 +3051,7 @@ base equ <bp+10>
 	neg eax
 	mov ch,'-'
 @@ispositive:
-	mov bx,[psz]
+	mov bx,psz
 	lea si,[bx+10]
 	mov @byte [si],0
 	dec si
@@ -3094,36 +3074,23 @@ base equ <bp+10>
 @@nosign:
 	inc si
 	mov ax,si
-	pop si
-	pop edi
-	pop bp
-	ret 8
+	ret
 
-num  equ <>
-psz  equ <>
-base equ <>
+ltob endp
 
-_ltob endp
+printf proc c uses si di fmt:ptr, args:vararg
 
-_printf proc
-
-	enter 18,0
-	push di
-	push si
-
-fmt     equ <bp+4>
-flag    equ <bp-1>
-longarg equ <bp-2>
-size_   equ <bp-4>
-fill    equ <bp-6>
-szTmp   equ <bp-18>
-;	register di = args
+local flag:byte
+local longarg:byte
+local size_:word
+local fill:word
+local szTmp[12]:byte
 
 	push ds
 	pop es
-	lea di,[fmt+2]
+	lea di,args
 @@L335:
-	mov si,[fmt]
+	mov si,fmt
 @@FC244:
 	lodsb
 	or al,al
@@ -3238,7 +3205,7 @@ szTmp   equ <bp-18>
 	push cx
 	push dx
 	push ax
-	call _ltob
+	call ltob
 	mov si,ax
 @@do_outputstring260:
 	push si
@@ -3275,19 +3242,9 @@ szTmp   equ <bp-18>
 	jmp @@F276
 @@SC257:
 	xor ax,ax
-	pop si
-	pop di
-	leave
 	ret
 
-fmt     equ <>
-flag    equ <>
-longarg equ <>
-size_   equ <>
-fill    equ <>
-szTmp   equ <>
-
-_printf endp
+printf endp
 
 ;--- char * _stdcall skipWhite(char * pszString)
 ;--- skip "white space" characters
@@ -3296,15 +3253,15 @@ _skipWhite proc
 	pop cx
 	pop bx
 	push cx
-@@nextitem:
+nextitem:
 	cmp @byte [bx],' '
-	je @@FB286
+	je @F
 	cmp @byte [bx],9
-	jne @@FB285
-@@FB286:
+	jne done
+@@:
 	inc bx
-	jmp @@nextitem
-@@FB285:
+	jmp nextitem
+done:
 	mov ax,bx
 	ret
 
@@ -3332,14 +3289,11 @@ _strlen endp
 ;--- int _cdecl _memicmp(char * psz1, char * psz2, int len);
 ;--- must preserve BX!
 
-__memicmp proc
-	push bp
-	mov bp,sp
-	push di
-	push si
-	mov cx,[bp+8]
-	mov si,[bp+6]
-	mov di,[bp+4]
+_memicmp proc c uses si di psz1:word, psz2:word, len:word
+
+	mov cx,len
+	mov si,psz2
+	mov di,psz1
 	cld
 @@nextitem:
 	lodsb
@@ -3350,11 +3304,8 @@ __memicmp proc
 	sub al,ah
 	loopz @@nextitem
 	cbw
-	pop si
-	pop di
-	pop bp
 	ret
-__memicmp endp
+_memicmp endp
 
 ;--- _stdcall toupper(char) returns uppercase character
 
@@ -3372,25 +3323,14 @@ _toupper proc
 
 _toupper endp
 
-;--- DWORD _stdcall GetValue(commandline, base, usesuffix)
-;--- converts a string into a DWORD
+;--- convert a string into a DWORD, returned in DX:AX
 
-_GetValue proc
-	push bp
-	mov bp,sp
-	push di
-	push esi
-
-commandline equ <bp+4>
-base equ <bp+6>
-usesuffix equ <bp+8>
-;	register di = len
-;	register esi = result
+GetValue proc stdcall uses esi di commandline:word, base:word, usesuffix:word
 
 	xor di,di
 	xor esi, esi			;result
 @@F314:
-	mov bx,@word [commandline]
+	mov bx,[commandline]
 	mov al,@byte [bx][di]
 	push ax
 	call _toupper
@@ -3451,117 +3391,78 @@ usesuffix equ <bp+8>
 	jnz @@nextchar
 	pop ax
 	pop dx
-	pop esi
-	pop di
-	pop bp
-	ret 3*2
+	ret
 
-commandline equ <>
-base equ <>
-usesuffix equ <>
-
-_GetValue endp
+GetValue endp
 
 ;--- char * _stdcall FindCommand(char * pszSearchString)
 ;--- parses the command line for a specific command.
 ;--- If found, the command is removed and
 ;--- the address behind that command is returned. Else, 0 is returned
-;--- si=pszCmdLine
+;--- SI -> commandline
 
-_FindCommand proc
-	pop cx
-	pop ax	;get pszSearchString
-	push cx
-	push di
-	push si
+FindCommand proc stdcall uses di si pszCmd:ptr
     
-	mov di,ax
+	mov di,pszCmd
 	push di
 	call _strlen
 	mov bx,ax		;searchlen
-;	mov si,[commandline]
-@@F299:
+nextitem:
 	cmp @byte [si],0
-	je @@FB301
-	push bx
-	push di
-	push si
-	call __memicmp
-	add sp,6
+	je notfound
+	invoke _memicmp, si, di, bx
 	or ax,ax
-	je @@L384
+	je itemfound
 	inc si
-	jmp @@F299
-@@L384:
+	jmp nextitem
+itemfound:		;item has been found, now remove it from cmdline
 	push si
 	mov di,si
 	add si,bx
 	push ds
 	pop es
-@@nextitem:
+@@:
 	lodsb
 	stosb
 	and al,al
-	jnz @@nextitem
+	jnz @B
 	pop ax
-	jmp @@EX297
-@@FB301:
+	jmp done
+notfound:
 	xor ax,ax
-@@EX297:
-	pop si
-	pop di
+done:
 	ret
 
-_FindCommand endp
+FindCommand endp
 
 ;--- ParseCmdLine(mode, pszCmdLine)
 
-ParseCmdLine proc
+ParseCmdLine proc c uses si di mode:word, pszCmdLine:ptr
 
-	push bp
-	mov bp,sp
-	push di
-	push si
 	@DbgOutS <"ParseCmdLine enter",13,10>
 
-mode equ <bp+4>
-pszCmdLine equ <bp+6>
+	mov di,mode
+	mov si,pszCmdLine
+	invoke printf, offset szStartup
 
-	mov di,[mode]
-	mov si,[pszCmdLine]
-	push offset szStartup
-	call _printf
-	pop bx
-
-	push offset szQuestion	;/?
-	call _FindCommand
-	or ax,ax
-	je @F
-	or di,di
-	jne @F
-	push offset szCannot	;option cannot be used as a device driver
-	call _printf
-	pop bx
-@@:
 if ?TESTMEM
-	push offset szTESTMEMOFF
-	call _FindCommand
+;--- /TESTMEM:OFF option
+	invoke FindCommand, offset szTESTMEMOFF
 	or ax,ax
 	jne @F
-	push offset szQuestion
-	call _FindCommand
+;--- do something useful here!
 @@:
 endif
 
-	push offset szVERBOSE
-	call _FindCommand
+;--- /VERBOSE option
+	invoke FindCommand, offset szVERBOSE
 	or ax,ax
 	je @F
 	mov _startup_verbose,1
 @@:
 if ?LOG
-	push offset szLOG
-	call _FindCommand
+;--- /LOG option
+	invoke FindCommand, offset szLOG
 	or ax,ax
 	je @F
 	mov _xms_logging_enabled,1
@@ -3569,167 +3470,98 @@ if ?LOG
 endif
 	cmp _startup_verbose,0
 	je @F
-	push offset szINTERFACE
-	call _printf
-	pop bx
+	invoke printf,offset szINTERFACE
 @@:
 
-	push offset szNUMHANDLES
-	call _FindCommand
+;--- /NUMHANDLES=xx option
+;--- ensure value xx is within limits
+	invoke FindCommand, offset szNUMHANDLES
 	or ax,ax
-	je @@I245
-
-	push 0
-	push 10
-	push ax
-	call _GetValue
+	je nonumhandles
+	invoke GetValue, ax, 10, 0
 	mov _xms_num_handles,ax
 	cmp _startup_verbose,0
-	je @@I2471
-
-	push ax
-	push offset szSelNumHandles
-	call _printf
-	add sp,4
-
-@@I2471:
+	je @F
+	invoke printf,offset szSelNumHandles,ax 
+@@:
 	cmp _xms_num_handles,8
-	jae @@I249
-
-	push offset szNumHandlesLim1
-	call _printf
-	pop bx
-
+	jae @F
+	invoke printf,offset szNumHandlesLim1
 	mov _xms_num_handles,8
-@@I249:
+@@:
 	cmp _xms_num_handles,128
-	jbe @@I245
-
-	push offset szNumHandlesLim2
-	call _printf
-	pop bx
-
+	jbe @F
+	invoke printf,offset szNumHandlesLim2
 	mov _xms_num_handles,128
-@@I245:
+@@:
+nonumhandles:
 
-	push offset szX2MAX32
-	call _FindCommand
+;--- /X2MAX32 and options
+	invoke FindCommand, offset szX2MAX32
 	or ax,ax
-	je @@I255
+	je @F
 	mov _x2max32,32767	;7fffH
-@@I255:
+@@:
 
-	push offset szNOX2MAX32
-	call _FindCommand
+;--- /METHOD:xx option
+	invoke FindCommand, offset szMETHOD
 	or ax,ax
-	je @@I257
-	mov _x2max32,-1	;ffffH
-@@I257:
-
-	push offset szMETHOD
-	call _FindCommand
-	or ax,ax
-	je @@I261
-
-	push ax
-	call _GetA20Method
-
+	je nomethod
+	invoke GetA20Method, ax
 	mov _method,al
-@@I261:
+nomethod:
 
-	push offset szMAX
-	call _FindCommand
+;--- /MAX=xx option
+	invoke FindCommand, offset szMAX
 	or ax,ax
-	je @@I263
-
-	push 1
-	push 10
-	push ax
-	call _GetValue
-
-	mov @word [_xms_max+0],ax
-	mov @word [_xms_max+2],dx
+	je nomax
+	invoke GetValue, ax, 10, 1
+	mov @word [xms_max+0],ax
+	mov @word [xms_max+2],dx
 	cmp _startup_verbose,0
-	je @@I263
+	je nomax
+	invoke printf,offset szMaximum, dx::ax
+nomax:
 
-	push dx
-	push ax
-	push offset szMaximum
-	call _printf
-	add sp,6
-
-@@I263:
-
-	push offset szHMAMIN
-	call _FindCommand
+;--- /SUPERMAX=xx option
+	invoke FindCommand, offset szSUPERMAX
 	or ax,ax
-	je @@I267X
+	je nosmax
+	invoke GetValue, ax, 10, 1
+	mov @word [xms_smax+0],ax
+	mov @word [xms_smax+2],dx
+nosmax:
 
-	push 1
-	push 10
-	push ax
-	call _GetValue
-
+;--- /HMAMIN=xx option
+	invoke FindCommand, offset szHMAMIN
+	or ax,ax
+	je nohmamin
+	invoke GetValue, ax, 10, 1
 	mov _hma_min,ax
 	cmp _startup_verbose,0
-	je @@I269
-
-	push ax
-	push offset szMinimum
-	call _printf
-	add sp,4
-
-@@I269:
+	je @F
+	invoke printf,offset szMinimum,ax 
+@@:
 	cmp _hma_min,63
-	jbe @@I271
-
-	push offset szHMAMAX
-	call _printf
-	pop bx
-
+	jbe @F
+	invoke printf,offset szHMAMAX
 	mov _hma_min,63
-@@I271:
+@@:
 	shl _hma_min,10
-@@I267X:
+nohmamin:
 
-	push offset szINT151
-	call _FindCommand
-	or ax,ax
-	je @@I273
-
-	push 0
-	push 16
-	push ax
-	call _GetValue
-
-	push ax
-	push offset szINT152
-	call _printf
-	add sp,4
-
-@@I273:
 	push si
 	call _skipWhite
-
 	mov si,ax
+
 	cmp @byte [si],0
-	je @@I276
+	je @F
+	invoke printf,offset szIgnored,ax
+@@:
 
-	push ax
-	push offset szignored
-	call _printf
-	add sp,4
-
-@@I276:
 	@DbgOutS <"ParseCmdLine exit",13,10>
 	xor ax,ax
-	pop si
-	pop di
-	pop bp
 	ret
-
-mode equ <>
-pszCmdLine equ <>
 
 ParseCmdLine endp
 
@@ -3746,9 +3578,12 @@ dispmsg proc
 	ret
 dispmsg endp
 
+;--- set entry in handle array
 ;--- ds:si -> handle array
 ;--- edx = block addr in kB
 ;--- ecx = block size in kB
+;--- updates ds:si to point to next (free) handle
+;--- updates global vars xms_max, xms_smax, xms_highest_addr
 
 seti15handle proc c public
 
@@ -3760,14 +3595,20 @@ seti15handle proc c public
 	or hma_exists,1
 @@:
 	cmp edx, 400000h    ;beyond 4GB?
+	jc @F
+	sub xms_smax, ecx	;/SUPERMAX option set?
 	jnc beyond4g
-	sub _xms_max, ecx	;MAXEXT option set?
+	add ecx, xms_smax	;limit to maximum
+	mov xms_smax,0
+	jecxz exit
+	jmp beyond4g
+@@:
+	sub xms_max, ecx	;/MAX option set?
 	jnc @F
-	add ecx, _xms_max	;limit to maximum
-	mov _xms_max,0
+	add ecx, xms_max	;limit to maximum
+	mov xms_max,0
 	jecxz exit
 @@:
-	add xms_mem_free, ecx
 	lea eax,[edx+ecx]
 	shl eax,10
 	dec eax
@@ -3787,8 +3628,8 @@ seti15handle endp
 
 ;-- look for extended memory, int 15h, ax/ah 0e820h
 ;-- in: ds:si->handle array
-;-- updates variable xms_mem_free
 ;-- modifies eax, ebx, ecx, edx, si, di
+;-- out: ds:si->next free handle
 
 geti15mem proc
 
@@ -3907,7 +3748,7 @@ initialize proc
 	cmp al,3h			; we need at least 3.00
 	jnc @@dosok
 	mov dx,offset old_dos
-@@error_exit:           ; error msgs old_dos, xms_twice, a20_error, vdisk_detected
+@@error_exit:           ; error msgs old_dos, xms_twice, a20_error, vdisk_detected, xms_tosmall
 	call dispmsg
 	mov dx,offset error_msg
 	mov ah,9
