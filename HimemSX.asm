@@ -1509,7 +1509,6 @@ pmcopy:
 	push dx
 	push di
 	push cx
-	add edi,ecx 	; buff += copied length
 
 	shld eax,esi,16	;push src descriptor
 	mov dl,al
@@ -1518,7 +1517,6 @@ pmcopy:
 	push dx
 	push si
 	push cx
-	add esi,ecx
 
 	xor eax,eax		;push entries 0+1
 	push eax
@@ -1526,12 +1524,19 @@ pmcopy:
 	push eax
 	push eax
 
+;--- update BH.ESI and BL.EDI 
+	mov ax,bx
+	add edi,ecx 	; buff += copied length
+	adc al,0
+	add esi,ecx
+	adc ah,0
+
 	push si
 	lea si,[esp+2]
+	push ax
 	shr cx,1		; convert to words
 
 ;--- is super-extended memory involved?
-	push bx
 	and bx,bx
 	jz @F
 ;--- then the extended Int15h, ah=87h API must be set
