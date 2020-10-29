@@ -1,4 +1,6 @@
 
+;--- HimemSX, XMM manager able to manage up to 1 TB memory.
+
 ;--- assembly time parameters
 
 VERSIONSTR		equ <'3.50'>
@@ -10,6 +12,7 @@ lf equ 10
 ifndef NUMHANDLES
 NUMHANDLES      equ 48      ;std 48, default number of handles
 endif
+MAXHANDLES      equ 128     ;std 128, max. number of handles
 ALLOWDISABLEA20 equ 1       ;std 1, 1=allow to disable A20
 BLOCKSIZE       equ 2000h   ;std 2000h, block size moved to/from ext. memory (max is 65535!)
 USEUNREAL       equ 1       ;std 1, 1=use "unreal" mode for EMB copy
@@ -27,13 +30,8 @@ MAXFREEKB       equ 0FFFFh  ;std FFFFh, xms v2.0 max ext. memory
 
 ;--- constants
 
-EXECMODE_SYS    equ 0       ;binary has been loaded as device
-EXECMODE_EXE    equ 1       ;binary has been loaded as .EXE
-
 CPUID1_PSE36    equ 17
-
 XMS_START       equ 1024+64 ; XMS starts at 1088k after HMA
-
 CMD_INIT        equ 0       ; init command (used when installed)
 
 ;--- DOS device driver status codes used
@@ -244,8 +242,8 @@ endif
 szINTERFACE		DB 'Interface : XMS ',VERSIONSTR,' 80686 1T ',  lf,  00H
 szNUMHANDLES	DB '/NUMHANDLES=',  00H
 szSelNumHandles	DB 'No of XMS handles: %u',  lf,  00H
-szNumHandlesLim1	DB 'HimemSX: NUMHANDLES must be >= 8, corrected',  lf, 7, 00H
-szNumHandlesLim2	DB 'HimemSX: NUMHANDLES must be <= 128, corrected',  lf, 7, 00H
+szNumHandlesLim1	DB 'HimemSX: NUMHANDLES must be >= 8, corrected',  lf, 00H
+szNumHandlesLim2	DB 'HimemSX: NUMHANDLES must be <= ',@CatStr(!",%MAXHANDLES,!"),', corrected',  lf, 00H
 szX2MAX32		DB '/X2MAX32',  00H
 szMETHOD		DB '/METHOD:',  00H
 szMAX			DB '/MAX=',  00H
@@ -253,8 +251,8 @@ szSUPERMAX		DB '/SUPERMAX=',  00H
 szMaximum		DB 'Maximum extended memory: %luK',  lf,  00H
 szHMAMIN		DB '/HMAMIN=',  00H
 szMinimum		DB 'Minimum HMA that has to be requested: %uK',  lf,  00H
-szHMAMAX		DB 'HimemSX: HMAMIN must be <= 63, corrected',  lf,  7, 00H
-szIgnored		DB 'Ignored commandline <%s>',  lf,  7, 00H
+szHMAMAX		DB 'HimemSX: HMAMIN must be <= 63, corrected',  lf,  00H
+szIgnored		DB 'Ignored commandline <%s>',  lf,  00H
 ;cant_disable_message db 'Can',27h,'t disable A20 - ignored',lf,'$'
 
 dHimem			db 'HimemSX: $'
@@ -320,7 +318,7 @@ endif
 	db "                  PORT92      Use port 92h always",10
 	db "  /HMAMIN=n       Specifies minimum number of Kbs of HMA that a program",10
 	db "                  must request to gain access to the HMA (default: 0Kb)",10
-	db "  /NUMHANDLES=m   Specifies number of XMS handles available (def: 48)",10
+	db "  /NUMHANDLES=m   Set number of XMS handles (default: 48, min: 8, max: ",@CatStr(!",%MAXHANDLES,!"),")",10
 if ?TESTMEM
 	db "  /TESTMEM:ON|OFF Performs or skips an extended memory test (def: OFF)",10
 endif
@@ -1336,7 +1334,8 @@ endif
 @@copy_loop:
 	mov ecx,edx
 	cmp ecx,BLOCKSIZE
-	jle @F
+;	jle @F					; 27.10.2020 don't do signed comparisons!
+	jbe @F
 	mov ecx,BLOCKSIZE
 @@:
 	sub edx,ecx
@@ -1900,6 +1899,10 @@ endif
 ; growing, try to allocate a new block
 
 	mov ah,11h				;11h is xms_ext_alloc_emb #
+	test word ptr [si].XMS_HANDLE.xh_baseK+2, 0FFC0h
+	jz @F
+	mov ah,15h				;15h is for super-extended memory
+@@:
 	call xms_ext_alloc_emb	;get a new handle in DX, size EDX
 	and ax,ax
 	jz @@ext_failed
@@ -2519,7 +2522,7 @@ xxx_success:
 	mov dx,offset szA20
 	mov ah,9
 	int 21h
-	
+
 	pop cx
 	pop si
 
@@ -2891,98 +2894,9 @@ strategy proc far
 	ret 				; far return here!
 strategy endp
 
-;******************************************************************************
-; initializes the driver. called only once!
-; may modify DI
-; In:   DS:DI - pointer to init structure
-; Out:  DS = DGROUP
-
-DoCommandline proc
-
-	mov ax,ss
-	mov dx,sp
-
-	push cs
-	pop ss
-	mov sp,offset _stacktop
-	pusha
-	push es
-	lds si,[di].init_strc.cmd_line
-@@:
-	lodsb
-	cmp al,20h
-	ja @B
-	dec si
-
-	sub sp,128
-	mov di,sp
-	push ss
-	pop es
-	mov cx,128-1
-@@nextitem2:
-	lodsb
-	cmp al,13
-	jz @@done
-	cmp al,10
-	jz @@done
-	stosb
-	and al,al
-	loopnz @@nextitem2
-@@done:
-	mov al,0
-	stosb
-	push ss
-	pop ds	;DS=DGROUP
-
-	push sp
-	push EXECMODE_SYS
-	call ParseCmdLine
-	add sp,4+128
-	pop es
-	popa
-;--- restore original stack, DOS requires it
-	mov ss,ax
-	mov sp,dx
-	ret
-
-DoCommandline endp
-
 printf proto c :ptr, :vararg
-ParseCmdLine proto c :word, :ptr
 
-;*********************************************
-; startpoint when executing as EXE
-;*********************************************
-
-start proc
-	push cs
-	pop ss
-	mov sp,offset _stacktop-128
-	call check_cpu			 ; do we have at least a 386?
-	jnz nota386
-	mov di,sp
-	push es
-	pop ds
-	push ss
-	pop es
-	mov si,80h
-	lodsb
-	and al,7Fh
-	movzx cx,al
-	rep movsb
-	mov al,0
-	stosb
-	push es
-	pop ds
-	mov _startup_verbose,1
-	invoke ParseCmdLine, EXECMODE_EXE, sp
-	invoke printf, offset szHello
-nota386:
-	mov ah,04ch
-	int 21h
-start endp
-
-handle_char proc
+print_char proc
 	pop cx
 	pop dx
 	push cx
@@ -2996,7 +2910,7 @@ handle_char proc
 	mov ah,2
 	int 21h
 	ret
-handle_char endp
+print_char endp
 
 ;--- get the A20 method ("/METHOD:xxx")
 
@@ -3094,125 +3008,119 @@ local szTmp[12]:byte
 	push ds
 	pop es
 	lea di,args
-@@L335:
+nextfcharX:
 	mov si,fmt
-@@FC244:
+nextfchar:
 	lodsb
 	or al,al
-	je @@SC257
+	je done
 	cmp al,'%'
-	je @@I246
+	je isfspec
 	push ax
-	call handle_char
-	jmp @@FC244
+	call print_char
+	jmp nextfchar
 
-@@I246:
+isfspec:
 	xor dx,dx
 	mov [longarg],dl
 	mov bl,1
 	mov cl,' '
 	cmp @byte [si],'-'
-	jne @@I247
+	jne @F
 	dec bx
 	inc si
-@@I247:
+@@:
 	mov [flag],bl
 	cmp @byte [si],'0'
-	jne @@L355
+	jne @F
 	mov cl,'0'
 	inc si
-@@L355:
+@@:
 	mov [fill],cx
 	mov [size_],dx
 	mov bx,dx
-	jmp @@L358
-@@FC250:
+	jmp checkfordigits
+nextdigit:
 	cmp @byte [si],'9'
-	jg @@L362
+	jg digitsdone
 	lodsb
 	sub al,'0'
 	cbw
 	imul cx,bx,10       ;cx = bx * 10
 	add ax,cx
 	mov bx,ax
-@@L358:
+checkfordigits:
 	cmp @byte [si],'0'
-	jge @@FC250
-@@L362:
+	jge nextdigit
+digitsdone:
 	mov [size_],bx
 	cmp @byte [si],'l'
-	jne @@I252
+	jne @F
 	mov @byte [longarg],1
 	inc si
-@@I252:
+@@:
 	lodsb
 	mov [fmt],si
 	cbw
-	cmp al,120              ;78h
-	je @@SC264
-	ja @@SD279
+	cmp al,'x'
+	je print_x
+	ja print_qm
 	or al,al
-	je @@SC257              ;\0
-	sub al,88
-	je @@SC264
+	je done                 ;\0
+	sub al,'X'
+	je print_x
 	sub al,11
-	je @@SC258
+	je print_c
 	dec al
-	je @@SC261
+	je print_d
 	sub al,5
-	je @@SC261
+	je print_i
 	sub al,10
-	je @@SC259
+	je print_s
 	sub al,2
-	je @@SC263
-@@SD279:                      ;default
+	je print_u
+print_qm:
 	push ax
-	push 63	;'?'
-	call handle_char
-	jmp @@L359
-@@SC258:                      ;'c'
+	push '?'
+	call print_char
+	jmp @F
+print_c:
 	push @word [di]
 	add di,2
-@@L359:
-	call handle_char
-	jmp @@L335
-@@SC259:                      ;'s'
+@@:
+	call print_char
+	jmp nextfcharX
+print_s:
 	mov si,[di]
 	add di,2
-	jmp @@do_outputstring260
-@@SC264:                      ;'X' + 'x'
+	jmp print_string
+print_x:
 	mov bx,16
-	jmp @@lprt262
-@@SC261:                      ;'d' + 'i'
+	jmp print_number
+print_d:
+print_i:
 	mov bx,-10
-	jmp @@lprt262
-@@SC263:                      ;'u'
+	jmp print_number
+print_u:
 	mov bx,10
-@@lprt262:
+print_number:
 	cmp @byte [longarg],0
-	je @@I265
-	mov ax,[di+0]
-	mov dx,[di+2]
+	je @F
+	mov eax,[di+0]
 	add di,4
-	jmp @@L341
-@@I265:
-	mov ax,[di]
+	jmp print_long
+@@:
+	movzx eax,@word [di]
 	add di,2
 	cmp bx,0
-	jge @@I267
-	cwd 
-	jmp @@L341
-@@I267:
-	sub dx,dx
-@@L341:
-	push bx
+	jge @F
+	movsx eax,ax
+@@:
+print_long:
 	lea cx,[szTmp]
-	push cx
-	push dx
-	push ax
-	call ltob
+	invoke ltob, eax, cx, bx
 	mov si,ax
-@@do_outputstring260:
+print_string:
 	push si
 	call _strlen
 	sub [size_],ax
@@ -3220,56 +3128,53 @@ local szTmp[12]:byte
 	jne @@L360
 	mov bx,[size_]
 	jmp @@L363
-@@F270:
+
+fillcharloop1:
 	push @word [fill]
-	call handle_char
+	call print_char
 	dec bx
 @@L363:
 	or bx,bx
-	jg @@F270
+	jg fillcharloop1
 	mov [size_],bx
 	jmp @@L360
-@@F273:
+
+charoutloopZ:
 	mov al,[si]
 	push ax
-	call handle_char
+	call print_char
 	inc si
 @@L360:
 	cmp @byte [si],0
-	jne @@F273
+	jne charoutloopZ
+
 	mov bx,[size_]
-@@F276:
+fillcharloop2:
 	or bx,bx
-	jle @@L335
+	jle nextfcharX      ;done, continue with formatstring
 	push @word [fill]
-	call handle_char
+	call print_char
 	dec bx
-	jmp @@F276
-@@SC257:
+	jmp fillcharloop2
+done:
 	xor ax,ax
 	ret
 
 printf endp
 
-;--- char * _stdcall skipWhite(char * pszString)
 ;--- skip "white space" characters
 
 _skipWhite proc
-	pop cx
-	pop bx
-	push cx
 nextitem:
-	cmp @byte [bx],' '
+	cmp @byte [si],' '
 	je @F
-	cmp @byte [bx],9
+	cmp @byte [si],9
 	jne done
 @@:
-	inc bx
+	inc si
 	jmp nextitem
 done:
-	mov ax,bx
 	ret
-
 _skipWhite endp
 
 ;--- int _stdcall strlen(char * pszString)
@@ -3312,43 +3217,39 @@ _memicmp proc c uses si di psz1:word, psz2:word, len:word
 	ret
 _memicmp endp
 
-;--- _stdcall toupper(char) returns uppercase character
+;--- toupper() returns uppercase character
 
 _toupper proc
-	pop cx
-	pop ax
-	push cx
 	cmp al,'a'
-	jb @@I290
+	jb @F
 	cmp al,'z'
-	ja @@I290
+	ja @F
 	sub al,20h
-@@I290:
+@@:
 	ret
 
 _toupper endp
 
-;--- convert a string into a DWORD, returned in DX:AX
+;--- convert a string into a DWORD, returned in EAX
+;--- also accept suffix G, M, K and adjust value then
 
 GetValue proc stdcall uses esi di commandline:word, base:word, usesuffix:word
 
-	xor di,di
 	xor esi, esi			;result
-@@F314:
-	mov bx,[commandline]
-	mov al,@byte [bx][di]
-	push ax
-	call _toupper
+	mov bx,commandline
+nextchar:
+	mov al,@byte [bx]
 	cmp al,'0'
-	jl @@I317
+	jb @F
 	cmp al,'9'
-	jg @@I317
+	ja @F
 	sub al,'0'
 	jmp @@I318
-@@I317:
+@@:
+	call _toupper
 	cmp al,'A'
 	jl @@FB316
-	sub al,55	;0037H
+	sub al,55	;'A' -> 10
 @@I318:
 	movzx ecx, @word [base]
 	cmp cl,al
@@ -3358,35 +3259,31 @@ GetValue proc stdcall uses esi di commandline:word, base:word, usesuffix:word
 	xchg eax,esi
 	movzx eax,al
 	add esi,eax
-	inc di
-	jmp @@F314
+	inc bx
+	jmp nextchar
 
 @@FB316:
-	mov bx,[commandline]
-	add bx,di
 	cmp @byte [usesuffix],0
 	je @@I322
 	mov al,[bx]
-	push ax
 	call _toupper
-	cmp al,77	;004dH
-	je @@SC328
-	ja @@I322
-	sub al,71	;0047H
-	je @@SC327
-	sub al,4
-	je @@SC329
+	cmp al,'M'
+	je is_mega
+	cmp al,'G'	;'G'
+	je is_giga
+	cmp al,'K'
+	je is_kilo	;'K'
 	jmp @@I322
-@@SC327:
+is_giga:
 	shl esi,10
-@@SC328:
+is_mega:
 	shl esi,10
-@@SC329:
+is_kilo:
 	mov @byte [bx],' '
 @@I322:
 	push esi
 	mov si,bx
-	mov di,[commandline]
+	mov di,commandline
 	push ds
 	pop es
 @@nextchar:
@@ -3394,8 +3291,7 @@ GetValue proc stdcall uses esi di commandline:word, base:word, usesuffix:word
 	stosb
 	and al,al
 	jnz @@nextchar
-	pop ax
-	pop dx
+	pop eax
 	ret
 
 GetValue endp
@@ -3440,14 +3336,13 @@ done:
 
 FindCommand endp
 
-;--- ParseCmdLine(mode, pszCmdLine)
+;--- ParseCmdLine()
+;--- si -> cmdline
 
-ParseCmdLine proc c uses si di mode:word, pszCmdLine:ptr
+ParseCmdLine proc
 
 	@DbgOutS <"ParseCmdLine enter",13,10>
 
-	mov di,mode
-	mov si,pszCmdLine
 	invoke printf, offset szStartup
 
 if ?TESTMEM
@@ -3494,10 +3389,10 @@ endif
 	invoke printf,offset szNumHandlesLim1
 	mov _xms_num_handles,8
 @@:
-	cmp _xms_num_handles,128
+	cmp _xms_num_handles,MAXHANDLES
 	jbe @F
 	invoke printf,offset szNumHandlesLim2
-	mov _xms_num_handles,128
+	mov _xms_num_handles,MAXHANDLES
 @@:
 nonumhandles:
 
@@ -3521,11 +3416,10 @@ nomethod:
 	or ax,ax
 	je nomax
 	invoke GetValue, ax, 10, 1
-	mov @word [xms_max+0],ax
-	mov @word [xms_max+2],dx
+	mov [xms_max],eax
 	cmp _startup_verbose,0
 	je nomax
-	invoke printf,offset szMaximum, dx::ax
+	invoke printf,offset szMaximum, eax
 nomax:
 
 ;--- /SUPERMAX=xx option
@@ -3533,8 +3427,7 @@ nomax:
 	or ax,ax
 	je nosmax
 	invoke GetValue, ax, 10, 1
-	mov @word [xms_smax+0],ax
-	mov @word [xms_smax+2],dx
+	mov [xms_smax],eax
 nosmax:
 
 ;--- /HMAMIN=xx option
@@ -3555,13 +3448,10 @@ nosmax:
 	shl _hma_min,10
 nohmamin:
 
-	push si
 	call _skipWhite
-	mov si,ax
-
 	cmp @byte [si],0
 	je @F
-	invoke printf,offset szIgnored,ax
+	invoke printf,offset szIgnored, si
 @@:
 
 	@DbgOutS <"ParseCmdLine exit",13,10>
@@ -3569,6 +3459,61 @@ nohmamin:
 	ret
 
 ParseCmdLine endp
+
+;******************************************************************************
+; initializes the driver. called only once!
+; may modify DI
+; In:   DS:DI - pointer to init structure
+; Out:  DS = DGROUP
+
+DoCommandline proc
+
+	mov ax,ss
+	mov dx,sp
+
+	push cs
+	pop ss
+	mov sp,offset _stacktop
+	pusha
+	push es
+	lds si,[di].init_strc.cmd_line
+@@:
+	lodsb
+	cmp al,20h
+	ja @B
+	dec si
+
+	sub sp,128
+	mov di,sp
+	push ss
+	pop es
+	mov cx,128-1
+@@nextitem2:
+	lodsb
+	cmp al,13
+	jz @@done
+	cmp al,10
+	jz @@done
+	stosb
+	and al,al
+	loopnz @@nextitem2
+@@done:
+	mov al,0
+	stosb
+	push ss
+	pop ds	;DS=DGROUP
+
+	mov si,sp
+	call ParseCmdLine
+	add sp,128
+	pop es
+	popa
+;--- restore original stack, DOS requires it
+	mov ss,ax
+	mov sp,dx
+	ret
+
+DoCommandline endp
 
 dispmsg proc
 	push cs
@@ -3722,17 +3667,15 @@ hascpuid proc
 	pop ax
 	pop ax						; get HiWord(EFlags) into AX
 	popfd						; restore EFlags
+	mov sp,di
+	pop di
 	test al,04	;AC bit set?
 	je @F
 	test al,20h	;CPUID bit set?
 	jz @F
-	mov sp,di
-	pop di
 	clc
 	ret
 @@:
-	mov sp,di
-	pop di
 	stc
 	ret
 hascpuid endp
@@ -3848,7 +3791,7 @@ endif
 ; we clear the handle table, as this may overwrite part of the code above
 ; but must not erase itself
 
-IF ($ - startoftext) le 128 * sizeof XMS_HANDLE
+IF ($ - startoftext) le MAXHANDLES * sizeof XMS_HANDLE
 
 	.err <this is an error! reserve some space after driver end ~!!>
 
@@ -3930,6 +3873,26 @@ init_interrupt proc far
 	ret
 init_interrupt endp
 
+;*********************************************
+; startpoint when executing as EXE
+;*********************************************
+
+startexe proc
+
+	cld
+	mov si,offset szHello
+nextchar:
+	lodsb cs:[si]
+	and al,al
+	jz done
+	push ax
+	call print_char
+	jmp nextchar
+done:
+	mov ah,04ch
+	int 21h
+startexe endp
+
 _TEXT ends
 
-	end start
+	end startexe

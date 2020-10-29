@@ -1,6 +1,12 @@
 
   History
 
+  29.10.2020:
+  - fixed: if a memory block beyond 4 GB was reallocated and had to be
+    "moved" (because its size increased and there was no free space "behind"
+    it), its new location was below the 4 GB barrier.
+  27.10.2020:
+  - fixed: block move with length > 2 GB failed due to signed comparison.
   26.10.2020:
   - fixed: cpuid check for PSE-36 used bit 16 instead of bit 17.
   - cleaned source (use prototypes & invoke)
