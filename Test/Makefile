@@ -2,8 +2,8 @@
 name = copyfile
 
 $(name).exe: $*.obj
-	@jwlink format dos file \lib\omf\jmppm32.obj,$*.obj name $*.EXE lib \lib\omf\jmppm32.lib op map=$*.MAP,quiet
+	@jwlink format dos file \hx\LibOMF\jmppm32.obj,$*.obj name $*.EXE lib \hx\LibOMF\jmppm32.lib op map=$*.MAP,quiet
 
-$(name).obj: $(name).asm $(name).mak
-	@jwasm -c -nologo -Sg -Fl$* -Fo$* -I\asm\inc $(name).asm
+$(name).obj: $(name).asm
+	@jwasm -nologo -Fl$* -Fo$* $(name).asm
 
