@@ -1,7 +1,9 @@
 
   History
 
-  29.10.2020:
+  11.11.2020:
+  - optionally place page dir at the end of first memory block.
+  29.10.2020: v1.0.0
   - fixed: if a memory block beyond 4 GB was reallocated and had to be
     "moved" (because its size increased and there was no free space "behind"
     it), its new location was below the 4 GB barrier.

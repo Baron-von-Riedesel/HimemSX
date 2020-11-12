@@ -1,39 +1,38 @@
 
-;--- how rdisk.asm is to be patched:
-;--- 1. XMS function call ah=89h has to be changed to 0C9h
-;--- 2. the XMS lock call following the allocation has to be disabled
-;--- 3. the XMS unlock call has to be disabled.
 
-;--- generally, the lock/unlock function pair in RDISK isn't
-;--- needed, because RDISK does not use the physical address returned
-;--- by the lock.
+ About
 
->>>>>>>>>>>>>>>>>>>>>>>>
--   mov ah,089h     ;Use V3.0 XMS "allocate memory" code.
-+   mov ah,0C9h     ;Use HimemSX "allocate super-extended memory" code.
-<<<<<<<<<<<<<<<<<<<<<<<<
+ RDiskSX.COM is a patched version of Jack R. Ellis's RDISK ramdisk driver.
+
+
+ How rdisk.asm is to be patched
+
+ 1. XMS function call ah=89h has to be changed to 0C9h
+ 2. the XMS lock call following the allocation has to be disabled
+ 3. the XMS unlock call has to be disabled.
+
+ The lock/unlock function pair in RDISK isn't really needed, 
+ because RDISK does not use the physical address returned by the lock.
+
+ Patch 1:
+
+;   mov ah,089h     ;Use V3.0 XMS "allocate memory" code.
+    mov ah,0C9h     ;Use HimemSX "allocate super-extended memory" code.
 I_GetX:
     call I_XMS      ;Request all necessary XMS memory.
     jnz  I_XmsE     ;Error?  Display message and quit!
-    mov  XMHdl,dx   ;Save XMS buffer "handle" number.
-    mov  XMSDH,dx
 
->>>>>>>>>>>>>>>>>>>>>>>>
--   mov  ah,00Ch    ;"Lock" our XMS memory.
--   call I_XMS
--   jnz  I_XmsE     ;Error?  Display msg. & quit!
-<<<<<<<<<<<<<<<<<<<<<<<<
+ Patch 2:
 
-I_Err:
-    push    dx      ;Init ERROR!  Save message pointer.
-    mov dx,XMHdl    ;Load our XMS memory "handle".
-    or  dx,dx       ;Did we reserve any XMS memory?
-    jz s I_LDMP     ;No, reload pointer & display msg.
+;   mov  ah,00Ch    ;"Lock" our XMS memory.
+;   call I_XMS
+;   jnz  I_XmsE     ;Error?  Display msg. & quit!
 
->>>>>>>>>>>>>>>>>>>>>>>>
--   mov ah,00Dh     ;Unlock and "free" our XMS memory.
--   push    dx
--   call    I_XMS
+ Patch 3:
+
+    mov ah,00Dh     ;Unlock and "free" our XMS memory.
+    push    dx
+;   call    I_XMS
     mov ah,00Ah
--   pop dx
-<<<<<<<<<<<<<<<<<<<<<<<<
+    pop dx
+

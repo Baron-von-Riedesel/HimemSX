@@ -1,5 +1,5 @@
 
-;--- HimemSX, XMM manager able to manage up to 1 TB memory.
+;--- HimemSX, XMM able to manage up to 1 TB memory.
 
 ;--- assembly time parameters
 
@@ -24,6 +24,7 @@ ifndef ?ALTSTRAT
 endif
 ?MERGE0HDL      equ 1       ;std 1, 1=try to merge even if handle to free has size 0
 ?HINF_MSCOMP    equ 1       ;std 1, 1=func. 0Eh (get handle info) MS Himem compatible 
+?PD110000       equ 0       ;std 0, 1=page dir at 110000h, 0=page dir at end of first i15 block
 
 ;MAXFREEKB      equ 0FBC0h
 MAXFREEKB       equ 0FFFFh  ;std FFFFh, xms v2.0 max ext. memory
@@ -1567,7 +1568,9 @@ pmcopy:
 ;--- BH: bits 32-39 of source
 ;--- ECX: bytes to copy
 
+if ?PD110000
 PAGEDIR equ 110000h
+endif
 DSTBASE equ 400000h*1
 SRCBASE equ 400000h*3
 
@@ -1587,8 +1590,13 @@ rmcopysx::
 	mov cr4,eax
 	.386p
 
-	mov eax,PAGEDIR
-	mov cr3,eax
+if ?PD110000
+	mov edx,PAGEDIR
+else
+	mov edx,0
+PageDir equ dword ptr $-4
+endif
+	mov cr3,edx
 
 ;--- 4 MB page directory entries:
 ;--- bit 7: 1=4MB page
@@ -1597,43 +1605,47 @@ rmcopysx::
 ;--- bit 21: 0
 ;--- bit 22-31: addressbits 22-31
 
+	push cx
 	push esi
 	push edi
-	push cx
 
-	assume ds:FLAT
+	mov dword ptr [edx+0],81h			;set 4MB page, present
+;--- .3.........2.........1.........0
+;--- 10987654321098765432109876543210
+;--- xxxxxxxxxx?????????????????????? bits 22-31 in edi
+;--- ?????????????xxxxxxxxxx????????? shld eax,edi,19
+;--- ?????????????xxxxxxxxxx?xxxxxxxx mov al,bl
+;--- ?????????????xxxxxxxxxx0xxxxxxxx and ah,0feh
+;--- xxxxxxxxxx0xxxxxxxx0000000000000 shl eax,13
+	shld eax,edi,19
+	mov al,bl
+	and ah,0feh
+	shl eax,13
 
-	mov dword ptr [eax+0],83h			;set 4MB page, writable, present
-
-	movzx eax,bl
-	mov edx,edi
-	shl eax,13							;dst bits 32-39 -> 13-20
-	and edx,0ffc00000h					;dst bits 22-31
 	and edi,3fffffh
-	add edi,DSTBASE
-	or eax, edx
 	mov al,83h							;dst 4MB page, writable, present
-	mov ds:[PAGEDIR+4],eax
+	add edi,DSTBASE
+	mov [edx+4],eax
 	add eax,1 shl 22
 	jnc @F								;4 GB boundary crossed?
 	add eax,1 shl 13
 @@:
-	mov ds:[PAGEDIR+8],eax
+	mov [edx+8],eax
 
-	movzx eax,bh
-	mov edx,esi
-	shl eax,13							;src bits 32-39 -> 13-20
-	and edx,0ffc00000h					;src bits 22-31
+	shld eax,esi,19
+	mov al,bh
+	and ah,0feh
+	shl eax,13
+
 	and esi,3fffffh
-	add esi,SRCBASE
-	or eax, edx
 	mov al,81h							;src 4MB page, present
-	mov ds:[PAGEDIR+12],eax
+	add esi,SRCBASE
+	mov [edx+12],eax
 	add eax,1 shl 22
 	jnc @F								;4 GB boundary crossed?
 	add eax,1 shl 13
 @@:
-	mov ds:[PAGEDIR+16],eax
+	mov [edx+16],eax
 
 	mov eax,cr0
 	bts eax,31
@@ -1652,9 +1664,9 @@ endif
 	and eax,7ffffffeh
 	mov cr0,eax
 
-	pop cx
 	pop edi
 	pop esi
+	pop cx
 	add edi,ecx
 	adc bl,0
 	add esi,ecx
@@ -1664,8 +1676,6 @@ endif
 	ret
 
 xms_move_emb endp 
-
-	assume ds:DGROUP
 
 ;******************************************************************************
 ; locks an EMB
@@ -3535,13 +3545,22 @@ dispmsg endp
 ;--- updates ds:si to point to next (free) handle
 ;--- updates global vars xms_max, xms_smax, xms_highest_addr
 
-seti15handle proc c public
+seti15handle proc
 
 	cmp edx, 1024		;does the block start at 0x100000?
 	jnz @F
+if ?PD110000
 	add edx, 64+4		;then exclude the first 64 kB for HMA + 4 kB for page directory
 	sub ecx, 64+4
 	jc exit
+else
+	add edx, 64
+	sub ecx, 64+4
+	jc exit
+	lea eax, [edx+ecx]	;place the page directory at the end of the first block
+	shl eax, 10
+	mov [PageDir],eax
+endif
 	or hma_exists,1
 @@:
 	cmp edx, 400000h    ;beyond 4GB?
