@@ -3,8 +3,8 @@
 
 ;--- assembly time parameters
 
-VERSIONSTR		equ <'3.50'>
-DRIVER_VER		equ 300h+50h
+DRIVER_VER		equ 300h+51h
+VERSIONSTR		equ <'3.51'>
 INTERFACE_VER	equ 350h
 
 lf equ 10
@@ -231,29 +231,29 @@ hma_exists				db 0
 
 ;--- constants
 
-szStartup   	DB 'HimemSX ', VERSIONSTR, ' [', @CatStr(!"%@Date!"), ']',lf
-				db 'Portions (c) Till Gerken & tom ehlert.',  lf,  00H
+szStartup   	DB 'HimemSX v', VERSIONSTR, ' [', @CatStr(!"%@Date!"), ']', lf
+				db 'Portions (c) Till Gerken & tom ehlert.', lf, 0
 if ?TESTMEM
-szTESTMEMOFF	DB '/TESTMEM:OFF',  00H
+szTESTMEMOFF	DB '/TESTMEM:OFF', 0
 endif
-szVERBOSE		DB '/VERBOSE',  00H
+szVERBOSE		DB '/VERBOSE', 0
 if ?LOG
-szLOG			DB '/LOG',  00H
+szLOG			DB '/LOG', 0
 endif
-szINTERFACE		DB 'Interface : XMS ',VERSIONSTR,' 80686 1T ',  lf,  00H
-szNUMHANDLES	DB '/NUMHANDLES=',  00H
-szSelNumHandles	DB 'No of XMS handles: %u',  lf,  00H
-szNumHandlesLim1	DB 'HimemSX: NUMHANDLES must be >= 8, corrected',  lf, 00H
-szNumHandlesLim2	DB 'HimemSX: NUMHANDLES must be <= ',@CatStr(!",%MAXHANDLES,!"),', corrected',  lf, 00H
-szX2MAX32		DB '/X2MAX32',  00H
-szMETHOD		DB '/METHOD:',  00H
-szMAX			DB '/MAX=',  00H
-szSUPERMAX		DB '/SUPERMAX=',  00H
-szMaximum		DB 'Maximum extended memory: %luK',  lf,  00H
-szHMAMIN		DB '/HMAMIN=',  00H
-szMinimum		DB 'Minimum HMA that has to be requested: %uK',  lf,  00H
-szHMAMAX		DB 'HimemSX: HMAMIN must be <= 63, corrected',  lf,  00H
-szIgnored		DB 'Ignored commandline <%s>',  lf,  00H
+szINTERFACE		DB 'Interface : XMS v3.5 80686 1TB', lf, 0
+szNUMHANDLES	DB '/NUMHANDLES=', 0
+szSelNumHandles	DB 'No of XMS handles: %u', lf, 0
+szNumHandlesLim1	DB 'HimemSX: NUMHANDLES must be >= 8, corrected', lf, 0
+szNumHandlesLim2	DB 'HimemSX: NUMHANDLES must be <= ',@CatStr(!",%MAXHANDLES,!"),', corrected', lf, 0
+szX2MAX32		DB '/X2MAX32', 0
+szMETHOD		DB '/METHOD:', 0
+szMAX			DB '/MAX=', 0
+szSUPERMAX		DB '/SUPERMAX=', 0
+szMaximum		DB 'Maximum extended memory: %luK', lf, 0
+szHMAMIN		DB '/HMAMIN=', 0
+szMinimum		DB 'Minimum HMA that has to be requested: %uK', lf, 0
+szHMAMAX		DB 'HimemSX: HMAMIN must be <= 63, corrected', lf, 0
+szIgnored		DB 'Ignored commandline <%s>', lf, 0
 ;cant_disable_message db 'Can',27h,'t disable A20 - ignored',lf,'$'
 
 dHimem			db 'HimemSX: $'
@@ -267,7 +267,7 @@ szBIOS  		db "BIOS",'$'
 szPort92 		db "Port 92",'$'
 szA20			db " A20 method used",13,lf,'$'
 szAlwaysOn		db 'Always on','$'
-MsgUnknownA20	db 'No Supported A20 method detected',0dh,lf,'$'
+MsgUnknownA20	db 'No Supported A20 method detected',13,lf,'$'
 
 old_dos 		db 'XMS needs at least DOS version 3.00.$'
 xms_twice		db 'XMS is already installed.$'
@@ -299,35 +299,35 @@ else
 endif
 
 szHello label byte
-	db "Extended memory host for DOS (coordinates the usage of XMS and HMA)",10
-	db "HimemSX is a device driver that is loaded in CONFIG.SYS.",10
-	db "Please place DEVICE=HIMEMSX.EXE [options] before any driver using XMS.",10,10
-	db "options: /MAX=### /METHOD:xxx /HMAMIN=n /NUMHANDLES=m /V /X2MAX32 /SUPERMAX=###",10
+	db "Extended memory host for DOS (coordinates the usage of XMS and HMA).", lf
+	db "HimemSX is a device driver to be loaded in CONFIG.SYS.", lf
+	db "Place DEVICE=HIMEMSX.EXE [options] before any driver using XMS!", lf, lf
+	db "Options: /MAX=### /METHOD:xxx /HMAMIN=n /NUMHANDLES=m /V /X2MAX32 /SUPERMAX=###", lf
 if ?TESTMEM or ?LOG
-	db ?TMSTR,?LGSTR,10
+	db ?TMSTR,?LGSTR, lf
 endif
-	db 10
-	db "  /MAX=###        limit memory controlled by XMM to ###K.",10
-	db "                  The HMA is not affected by this value, it's always included",10
-	db "  /METHOD:xxx     Specifies the method to be used for A20 handling.",10
-	db "                  Possible values for xxx:",10
-	db "                  ALWAYSON    Assume that A20 line is permanently ON",10
-	db "                  BIOS        Use BIOS to toggle the A20 line",10
-	db "                  FAST        Use port 92h, bypass INT 15h test",10
-	db "                  PS2         Use port 92h, bypass PS/2 test",10
-	db "                  KBC         Use the keyboard controller",10
-	db "                  PORT92      Use port 92h always",10
-	db "  /HMAMIN=n       Specifies minimum number of Kbs of HMA that a program",10
-	db "                  must request to gain access to the HMA (default: 0Kb)",10
-	db "  /NUMHANDLES=m   Set number of XMS handles (default: 48, min: 8, max: ",@CatStr(!",%MAXHANDLES,!"),")",10
+	db lf
+	db "  /MAX=###        limit memory controlled by XMM to ###K.", lf
+	db "                  The HMA is not affected by this value, it's always included.", lf
+	db "  /METHOD:xxx     Specifies the method to be used for A20 handling.", lf
+	db "                  Possible values for xxx:", lf
+	db "                  ALWAYSON    Assume that A20 line is permanently ON", lf
+	db "                  BIOS        Use BIOS to toggle the A20 line", lf
+	db "                  FAST        Use port 92h, bypass INT 15h test", lf
+	db "                  PS2         Use port 92h, bypass PS/2 test", lf
+	db "                  KBC         Use the keyboard controller", lf
+	db "                  PORT92      Use port 92h always", lf
+	db "  /HMAMIN=n       Specifies minimum number of Kbs of HMA that a program", lf
+	db "                  must request to gain access to the HMA (default: 0Kb).", lf
+	db "  /NUMHANDLES=m   Set number of XMS handles (default: 48, min: 8, max: ",@CatStr(!",%MAXHANDLES,!"),").", lf
 if ?TESTMEM
-	db "  /TESTMEM:ON|OFF Performs or skips an extended memory test (def: OFF)",10
+	db "  /TESTMEM:ON|OFF Performs or skips an extended memory test (def: OFF).", lf
 endif
-	db "  /SUPERMAX=###   limit super-extended memory controlled by XMM to ###K.",10
-	db "  /V              Gives extra information",10 
-	db "  /X2MAX32        Limit XMS 2.0 free/avail. memory report to 32M-1K",10
+	db "  /SUPERMAX=###   limit super-extended memory controlled by XMM to ###K.", lf
+	db "  /V              Gives extra information.", lf 
+	db "  /X2MAX32        Limit XMS 2.0 free/avail. memory report to 32M-1K.", lf
 if ?LOG
-	db "  /LOG            Logs the driver activity to the screen",10
+	db "  /LOG            Logs the driver activity to the screen.", lf
 endif
 	db 0
 
@@ -1438,7 +1438,7 @@ endif
 	ret
 
 else
-
+  if 0
 	pushf
 	cli 					; no interrupts during the block move
 	pushf
@@ -1477,7 +1477,46 @@ endif
 	mov es,dx
 	mov cr0,eax
 	ret
-
+  else
+;--- set int 0dh, then just start to copy.
+;--- if int 0dh is called, an exception occured, since IRQs are disabled.
+;--- then set unreal mode inside int 0dh code.
+	xor dx,dx
+	mov ax,cs
+	mov ds,dx
+	mov es,dx
+	pushf
+	shl eax,16
+	mov ax,offset myint0d
+	shr ecx,2				; get number of DWORDS to move
+	cli
+	xchg eax,ds:[13*4]
+	rep movs @dword [edi],[esi]
+	adc cx,cx
+	rep movs @word [edi],[esi]	 ; move a trailing WORD
+	mov ds:[13*4],eax		; restore int 0dh
+	popf
+	ret
+myint0d:
+	push ds
+	push es
+	push eax
+	lgdt fword ptr cs:[gdt32]; load GDTR (use CS prefix here)
+	mov eax,cr0
+	inc ax					; set PE bit
+	mov cr0,eax
+;	jmp @F
+;@@:
+	mov dx,data32sel
+	dec ax					; clear PE bit
+	mov ds,dx
+	mov es,dx
+	mov cr0,eax
+	pop eax
+	pop es
+	pop ds
+	iret
+  endif
 endif
 
 
@@ -3898,16 +3937,10 @@ init_interrupt endp
 
 startexe proc
 
-	cld
-	mov si,offset szHello
-nextchar:
-	lodsb cs:[si]
-	and al,al
-	jz done
-	push ax
-	call print_char
-	jmp nextchar
-done:
+	push cs
+	pop ds
+	invoke printf, offset szStartup
+	invoke printf, offset szHello
 	mov ah,04ch
 	int 21h
 startexe endp
