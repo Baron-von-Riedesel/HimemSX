@@ -25,6 +25,7 @@ endif
 ?MERGE0HDL      equ 1       ;std 1, 1=try to merge even if handle to free has size 0
 ?HINF_MSCOMP    equ 1       ;std 1, 1=func. 0Eh (get handle info) MS Himem compatible 
 ?PD110000       equ 0       ;std 0, 1=page dir at 110000h, 0=page dir at end of first i15 block
+?ALLOCDX0       equ 1       ;std 1, 1=return DX=0 if alloc fails
 
 ;MAXFREEKB      equ 0FBC0h
 MAXFREEKB       equ 0FFFFh  ;std FFFFh, xms v2.0 max ext. memory
@@ -1026,6 +1027,9 @@ endif
 	popf
 	pop cx
 	pop edx
+if ?ALLOCDX0
+	xor dx,dx	;return DX=0 if alloc fails
+endif
 	xor ax,ax
 	ret
 @@nullhandle:
@@ -1069,7 +1073,7 @@ endif
 	popf
 	pop cx
 	pop edx
-	mov dx,di						; return handle in DX
+	mov dx,di			; return handle in DX
 	mov bl,0
 	mov ax,1
 	ret
