@@ -26,6 +26,13 @@ endif
 ?HINF_MSCOMP    equ 1       ;std 1, 1=func. 0Eh (get handle info) MS Himem compatible 
 ?PD110000       equ 0       ;std 0, 1=page dir at 110000h, 0=page dir at end of first i15 block
 ?ALLOCDX0       equ 1       ;std 1, 1=return DX=0 if alloc fails
+ifdef _DEBUG
+?CATCHEXC       equ 1       ;catch exceptions in protected-mode
+else
+?CATCHEXC       equ 0
+endif
+?RESTDSESREGS   equ 1       ;restore segment registers from unreal mode
+?RESTCSREG      equ 1       ;restore CS seg after sx pmode - shouldn't be necessary, but apparently is...
 
 ;MAXFREEKB      equ 0FBC0h
 MAXFREEKB       equ 0FFFFh  ;std FFFFh, xms v2.0 max ext. memory
@@ -237,7 +244,7 @@ szStartup   	DB 'HimemSX v', VERSIONSTR, ' [', @CatStr(!"%@Date!"), ']', lf
 if ?TESTMEM
 szTESTMEMOFF	DB '/TESTMEM:OFF', 0
 endif
-szVERBOSE		DB '/VERBOSE', 0
+szVerbose		DB '/V', 0
 if ?LOG
 szLOG			DB '/LOG', 0
 endif
@@ -254,6 +261,7 @@ szMaximum		DB 'Maximum extended memory: %luK', lf, 0
 szHMAMIN		DB '/HMAMIN=', 0
 szMinimum		DB 'Minimum HMA that has to be requested: %uK', lf, 0
 szHMAMAX		DB 'HimemSX: HMAMIN must be <= 63, corrected', lf, 0
+szPageDir		DB 'Page Directory will be at %lX', lf, 0
 szIgnored		DB 'Ignored commandline <%s>', lf, 0
 ;cant_disable_message db 'Can',27h,'t disable A20 - ignored',lf,'$'
 
@@ -370,6 +378,12 @@ dummyretf:
 
 data32dsc   desc <-1,0,0,92h,0cfh,0>  ; 08 32-bit read/write data, 4G
 data16dsc   desc <-1,0,0,92h,  0h,0>  ; 10 16-bit read/write data, 64k
+if ?CATCHEXC
+code16dsc   desc <-1,0,0,9Ah,  0h,0>  ; 18 16-bit read/exec code, 64k
+code16sel equ 18h
+videodsc    desc <-1,8000h,0Bh,92h,0h,0>; 20 selector for vga segment B800h
+videosel  equ 20h
+endif
 gdt_size equ $ - offset gdt_start
 data32sel   equ 08h
 data16sel   equ 10h
@@ -377,6 +391,65 @@ data16sel   equ 10h
 xms_highest_addr dd 10FFFFh
 xms_handle_table XMS_HANDLETABLE <0fdh, size XMS_HANDLE, 0, 0>
 
+if ?CATCHEXC
+
+gate    struct
+ofs     dw ?
+sel     dw ?
+attrib  dw ?
+ofs32   dw ?
+gate    ends
+stdidt dw 3FFh,0,0
+idt32  dw 19*sizeof gate-1,idt_start,0
+idt_start label gate
+	gate <exc00+00,code16sel,08E00h,0>
+	gate <exc00+04,code16sel,08E00h,0>
+	gate <exc00+08,code16sel,08E00h,0>
+	gate <exc00+12,code16sel,08E00h,0>
+	gate <exc00+16,code16sel,08E00h,0>
+	gate <exc00+20,code16sel,08E00h,0>
+	gate <exc00+24,code16sel,08E00h,0>
+	gate <exc00+28,code16sel,08E00h,0>
+	gate <exc00+32,code16sel,08E00h,0>
+	gate <exc00+36,code16sel,08E00h,0>
+	gate <exc00+40,code16sel,08E00h,0>
+	gate <exc00+44,code16sel,08E00h,0>
+	gate <exc00+48,code16sel,08E00h,0>
+	gate <exc00+52,code16sel,08E00h,0>
+	gate <exc00+56,code16sel,08E00h,0>
+	gate <exc00+60,code16sel,08E00h,0>
+	gate <exc00+64,code16sel,08E00h,0>
+	gate <exc00+68,code16sel,08E00h,0>
+	gate <exc00+72,code16sel,08E00h,0>
+EXCNO = 0
+exc00 label near
+	rept 19
+	push EXCNO
+	jmp excxx
+	EXCNO = EXCNO+1
+	endm
+excxx:
+	pop ax
+	shld cx,ax,12
+	and al,0Fh
+	add al,'0'
+	and cl,0Fh
+	add cl,'0'
+	cmp al,'9'
+	jbe @F
+	add al,7
+@@:
+	mov ah,17h
+	mov ch,17h
+	shl eax,16
+	mov ax,cx
+	push videosel
+	pop ds
+	mov dword ptr ds:[0],17581745h
+	mov dword ptr ds:[4],173D1743h
+	mov dword ptr ds:[8],eax
+	jmp $
+endif
 	align 4
 
 ;******************************************************************************
@@ -444,7 +517,7 @@ test_a20 endp
 enable_a20 proc
 	push ax
 	mov ah,2
-	jmp short disable_enable_a20
+	jmp disable_enable_a20
 enable_a20 endp
 
 disable_a20 proc
@@ -462,7 +535,7 @@ disable_enable_a20 proc	;patch area
 ; since this is replaceable, we need to bulk up the space allocated for it
 ;  for larger replacement routines
 
-	DB 60-2 DUP (?)
+	DB 42-2 DUP (?)
 
 size_disable_enable_a20 equ $ - disable_enable_a20
 
@@ -1612,7 +1685,7 @@ pmcopy:
 ;--- ECX: bytes to copy
 
 if ?PD110000
-PAGEDIR equ 110000h
+PageDir equ 110000h
 endif
 DSTBASE equ 400000h*1
 SRCBASE equ 400000h*3
@@ -1621,6 +1694,9 @@ rmcopysx::
 	pushf
 	cli 					; no interrupts when doing protected mode
 	lgdt fword ptr cs:[gdt32]; load GDTR (use CS prefix here)
+if ?CATCHEXC
+	lidt fword ptr cs:[idt32]
+endif
 	mov eax,cr0
 	mov dx,data32sel
 	inc ax			;set PE bit
@@ -1634,7 +1710,7 @@ rmcopysx::
 	.386p
 
 if ?PD110000
-	mov edx,PAGEDIR
+	mov edx,PageDir
 else
 	mov edx,0
 PageDir equ dword ptr $-4
@@ -1698,7 +1774,7 @@ endif
 	rep movs @dword [edi],[esi]
 	adc cx,cx
 	rep movs @word [edi],[esi]	; move a trailing WORD
-if 1 ; may be disabled
+if ?RESTDSESREGS
 	mov dx,data16sel			; restore selector attributes to 64 kB
 	mov ds,dx
 	mov es,dx
@@ -1706,7 +1782,15 @@ endif
 	mov eax,cr0
 	and eax,7ffffffeh
 	mov cr0,eax
-
+if ?RESTCSREG
+	db 0eah		;jmp far16 opcode
+	dw offset @F
+RmCS dw 0
+@@:
+endif
+if ?CATCHEXC
+	lidt fword ptr cs:[stdidt]
+endif
 	pop edi
 	pop esi
 	pop cx
@@ -2080,7 +2164,7 @@ xms_realloc_emb proc
 	call xms_ext_realloc_emb
 	push bx 						; recover top 16 bit of ebx
 	pop ebx
-	ret									
+	ret
 
 xms_realloc_emb endp
 
@@ -2722,131 +2806,14 @@ detect_and_handle_test endp
 
 ; reserve size of routine checks
 
-A20MAX = 0
-
-IF A20MAX lt size_disable_enable_a20_fast
-A20MAX = size_disable_enable_a20_fast
-ENDIF
-
-IF A20MAX lt size_disable_enable_a20_BIOS
-A20MAX = size_disable_enable_a20_BIOS
-ENDIF
-
-IF A20MAX lt size_disable_enable_a20_KBC
-A20MAX = size_disable_enable_a20_KBC
-ENDIF
-
-;--- @display %A20MAX
-
-if 0;A20MAX gt size_disable_enable_a20
-	.err <disable_enable_a20 too short, increase! >
+if size_disable_enable_a20_fast gt size_disable_enable_a20
+	.err <disable_enable_a20_fast too long, increase buffer! >
 endif
-
-if 0
-
-; KBC method
-; entry: ah == 0 A20 turn off, ah == 2 turn on, ax on stack
-
-disable_enable_a20_KBC:
-	pushf
-	cli				; shut off interrupts while we twiddle
-
-	call cs:[delay2ptr]
-	mov al,0d0h		; 8042 read output port
-	out 64h,al		; issue to command register
-
-deaa_loop:
-	in al,64h      ; read status register
-	test al,1       ; check if output buffer full
-	jz deaa_loop
-
-	in al,60h		; read data register
-	or ah,ah		; check enable/disable request
-	jne deaa_enable
-	and al,NOT 2	; turn off A20 bit to disable
-	jmp deaa_write
-
-deaa_enable:
-	or al,ah		; turn on A20 bit to enable
-
-deaa_write:
-	push ax		; save bit status
-	call cs:[delay2ptr]
-	mov al,0d1h		; 8042 write output port
-	out 64h,al		; issue to command register
-	call cs:[delay2ptr]
-	pop ax			; restore bit status
-	out 60h,al		; issue to data register
-	call cs:[delay2ptr]
-
-	mov al,0ffh		; pulse output port (delay for A20)
-	out 64h,al
-	call cs:[delay2ptr]
-
-	popf
-
-	pop ax
-	ret
-
-disable_enable_a20_KBC_end:
-
-;DisableA20PS2:
-;    in  al,92h ; 
-;    and al,not 2   ; switch off
-;    out 92h,al
-;                ; wait until it gets off
-;    xor cx,cx
-;disableps2wait:
-;    in  al,92h
-;    test al,2
-;    loopnz disableps2wait
-;    ret
-
-;DisableA20PS2End:
-
-
-MsgPS2Detected        db '- trying PS/2 maschine',0dh,0ah,'$'
-
-detect_and_handle_PS2 proc 
-;        mov ah,0C0h
-;        stc
-;        int 15h
-;        jc  noPS2
-
-;        or ah,ah
-;        jnz noPS2
-
-;        test   [byte es:bx+5],2 ; feature byte 1, bus is microchannel
-;        jz NoPS2
-
-
-	mov dx,offset MsgPS2Detected
-	call dispmsg
-
-	cld
-
-                                    ; copy PS2 handler into place       
-
-IF disable_enable_a20_PS2_end - disable_enable_a20_PS2 gt disable_enable_a20_end-disable_enable_a20
-    .err <this is an error! reserve some space>
-ENDIF                                                        
-	push cs
-	pop  es
-
-	mov di, offset disable_enable_a20
-	mov si, offset disable_enable_a20_PS2
-	mov cx, offset disable_enable_a20_PS2_end - offset disable_enable_a20_PS2
-	rep movsb
-
-	clc			; flag success
-	ret
-
-noPS2:
-	stc			; flag failure
-	ret
-
-detect_and_handle_PS2 endp
-
+if size_disable_enable_a20_BIOS gt size_disable_enable_a20
+	.err <disable_enable_a20_BIOS too long, increase buffer! >
+endif
+if size_disable_enable_a20_KBC gt size_disable_enable_a20
+	.err <disable_enable_a20_KBC too long, increase buffer! >
 endif
 
 ;--- set the a20 enable/disable code in the resident part
@@ -3009,8 +2976,10 @@ GetA20Method proc stdcall uses si di pszMethod:ptr
 GetA20Method endp
 
 ;--- convert long to string
+;--- SS may be != DS here!
+;--- assume psz is a string defined on stack!
 
-ltob proc stdcall uses edi si num:dword, psz:ptr, base:word
+ltob proc stdcall uses edi num:dword, psz:ptr, base:word
 
 	mov ch,0
 	movzx edi,base
@@ -3024,9 +2993,9 @@ ltob proc stdcall uses edi si num:dword, psz:ptr, base:word
 	mov ch,'-'
 @@ispositive:
 	mov bx,psz
-	lea si,[bx+10]
-	mov @byte [si],0
-	dec si
+	add bx,10
+	mov @byte ss:[bx],0
+	dec bx
 @@nextdigit:
 	xor edx, edx
 	div edi
@@ -3035,20 +3004,22 @@ ltob proc stdcall uses edi si num:dword, psz:ptr, base:word
 	jbe @@isdigit
 	add dl,7+20h
 @@isdigit:
-	mov [si],dl
-	dec si
+	mov ss:[bx],dl
+	dec bx
 	and eax, eax
 	jne @@nextdigit
 	cmp ch,0
 	je @@nosign
-	mov [si],ch
-	dec si
+	mov ss:[bx],ch
+	dec bx
 @@nosign:
-	inc si
-	mov ax,si
+	inc bx
+	mov ax,bx
 	ret
 
 ltob endp
+
+;--- assume SS!=DS
 
 printf proc c uses si di fmt:ptr, args:vararg
 
@@ -3058,8 +3029,6 @@ local size_:word
 local fill:word
 local szTmp[12]:byte
 
-	push ds
-	pop es
 	lea di,args
 nextfcharX:
 	mov si,fmt
@@ -3072,8 +3041,12 @@ nextfchar:
 	push ax
 	call print_char
 	jmp nextfchar
+done:
+	xor ax,ax
+	ret
 
 isfspec:
+	push nextfcharX
 	xor dx,dx
 	mov [longarg],dl
 	mov bl,1
@@ -3114,39 +3087,28 @@ digitsdone:
 @@:
 	lodsb
 	mov [fmt],si
-	cbw
 	cmp al,'x'
 	je print_x
-	ja print_qm
-	or al,al
-	je done                 ;\0
-	sub al,'X'
+	cmp al,'X'
 	je print_x
-	sub al,11
+	cmp al,'c'
 	je print_c
-	dec al
+	cmp al,'d'
 	je print_d
-	sub al,5
+	cmp al,'i'
 	je print_i
-	sub al,10
+	cmp al,'s'
 	je print_s
-	sub al,2
+	cmp al,'u'
 	je print_u
-print_qm:
-	push ax
-	push '?'
-	call print_char
+	push '%'
 	jmp @F
 print_c:
-	push @word [di]
+	push @word ss:[di]
 	add di,2
 @@:
 	call print_char
-	jmp nextfcharX
-print_s:
-	mov si,[di]
-	add di,2
-	jmp print_string
+	retn
 print_x:
 	mov bx,16
 	jmp print_number
@@ -3159,23 +3121,38 @@ print_u:
 print_number:
 	cmp @byte [longarg],0
 	je @F
-	mov eax,[di+0]
+	mov eax,ss:[di]
 	add di,4
 	jmp print_long
 @@:
-	movzx eax,@word [di]
+	movzx eax,@word ss:[di]
 	add di,2
 	cmp bx,0
 	jge @F
 	movsx eax,ax
 @@:
 print_long:
-	lea cx,[szTmp]
+	lea cx,szTmp
 	invoke ltob, eax, cx, bx
 	mov si,ax
+	push ds
+	push ss
+	pop ds
+	call print_string
+	pop ds
+	retn
+
+print_s:
+	mov si,ss:[di]
+	add di,2
+
 print_string:
-	push si
-	call _strlen
+	mov ax,si
+	.while byte ptr [si]
+		inc si
+	.endw
+	sub si,ax
+	xchg ax,si
 	sub [size_],ax
 	cmp @byte [flag],1
 	jne @@L360
@@ -3183,7 +3160,7 @@ print_string:
 	jmp @@L363
 
 fillcharloop1:
-	push @word [fill]
+	push [fill]
 	call print_char
 	dec bx
 @@L363:
@@ -3204,14 +3181,13 @@ charoutloopZ:
 	mov bx,[size_]
 fillcharloop2:
 	or bx,bx
-	jle nextfcharX      ;done, continue with formatstring
+	jle @F
 	push @word [fill]
 	call print_char
 	dec bx
 	jmp fillcharloop2
-done:
-	xor ax,ax
-	ret
+@@:
+	retn
 
 printf endp
 
@@ -3229,25 +3205,6 @@ nextitem:
 done:
 	ret
 _skipWhite endp
-
-;--- int _stdcall strlen(char * pszString)
-
-_strlen proc
-	pop cx
-	pop ax		;get pszString
-	push cx
-	push di
-	mov cx,-1
-	mov di,ax
-	mov al,0
-	cld
-	repnz scasb
-	mov ax,cx
-	inc ax
-	not ax
-	pop di
-	ret
-_strlen endp
 
 ;--- int _cdecl _memicmp(char * psz1, char * psz2, int len);
 ;--- must preserve BX!
@@ -3358,9 +3315,12 @@ GetValue endp
 FindCommand proc stdcall uses di si pszCmd:ptr
     
 	mov di,pszCmd
-	push di
-	call _strlen
-	mov bx,ax		;searchlen
+	mov bx,di
+	.while byte ptr [di]
+		inc di
+	.endw
+	sub di,bx
+	xchg bx,di		;string len to BX
 nextitem:
 	cmp @byte [si],0
 	je notfound
@@ -3407,8 +3367,8 @@ if ?TESTMEM
 @@:
 endif
 
-;--- /VERBOSE option
-	invoke FindCommand, offset szVERBOSE
+;--- /V option
+	invoke FindCommand, offset szVerbose
 	or ax,ax
 	je @F
 	mov _startup_verbose,1
@@ -3801,10 +3761,19 @@ initialize proc
 
 	mov ax,cs				; setup descriptors
 ;	 mov [code_seg],ax		; eliminate relocation entry
+if ?RESTCSREG
+	mov RmCS,ax
+endif
 	movzx eax,ax
 	shl eax,4
 ;	 or @dword [code16dsc+2],eax
 	add @dword [gdt32+2],eax
+if ?CATCHEXC
+	add @dword [idt32+2],eax
+	mov code16dsc.base00_15,ax
+	shr eax,16
+	mov code16dsc.base16_23,al
+endif
 
 	mov ax,352Fh			; getvect --> es:bx
 	int 21h
@@ -3821,10 +3790,10 @@ initialize proc
 ifdef _DEBUG
 	jmp @F
 else
-if ?LOG
+ if ?LOG
 	cmp [_xms_logging_enabled],0
 	jne @F
-endif
+ endif
 endif
 
 if ?LOG
@@ -3838,8 +3807,8 @@ if ?LOG
 	mov si, di
 	add si, 3
 	and si, not 3
-@@:
 endif
+@@:
 	mov @word xms_handle_table.xht_pArray+0, si
 	mov @word xms_handle_table.xht_pArray+2, ds
 
@@ -3849,6 +3818,11 @@ endif
 	cmp hma_exists,1
 	mov dx,offset xms_toosmall
 	jnz @@error_exit
+
+	cmp _startup_verbose,0
+	je @F
+	invoke printf,offset szPageDir,PageDir 
+@@:
 
 ; we clear the handle table, as this may overwrite part of the code above
 ; but must not erase itself
