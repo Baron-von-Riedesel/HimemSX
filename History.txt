@@ -5,6 +5,9 @@
   - xms block move function speed-up.
   - optionally place page dir at the end of first memory block.
   - return DX=0 if emb allocation fails (XMS spec).
+  - debug version: exception in protected-mode caught.
+  - bugfix: printf() did assume SS==DS.
+  - restore rm CS after sx pmode (needed by some machines, but why?)
   29.10.2020: v3.50
   - fixed: if a memory block beyond 4 GB was reallocated and had to be
     "moved" (because its size increased and there was no free space "behind"
