@@ -1,6 +1,8 @@
 
   History
 
+  17.12.2020: v3.52
+  - set RW page flag for page 0, else, if CR0.WP is set, a reboot occurs.
   11.12.2020: v3.51
   - xms block move function speed-up.
   - optionally place page dir at the end of first memory block.

@@ -3,8 +3,8 @@
 
 ;--- assembly time parameters
 
-DRIVER_VER		equ 300h+51h
-VERSIONSTR		equ <'3.51'>
+DRIVER_VER		equ 300h+52h
+VERSIONSTR		equ <'3.52'>
 INTERFACE_VER	equ 350h
 
 lf equ 10
@@ -33,6 +33,15 @@ else
 endif
 ?RESTDSESREGS   equ 1       ;restore segment registers from unreal mode
 ?RESTCSREG      equ 1       ;restore CS seg after sx pmode - shouldn't be necessary, but apparently is...
+
+if ?RESTDSESREGS or ?CATCHEXC
+;--- if DS+ES is to be restored to 64kB before leaving protected-mode,
+;--- set page 0-3FFFFFh to RW since GDT is written then [accessed bit] and
+;--- CR0 WP bit may be set!
+PF_PAGE0		equ 80h + 2 + 1	;set 4MB page + RW + Present
+else        
+PF_PAGE0		equ 80h + 1		;set 4MB page + Present
+endif
 
 ;MAXFREEKB      equ 0FBC0h
 MAXFREEKB       equ 0FFFFh  ;std FFFFh, xms v2.0 max ext. memory
@@ -99,7 +108,7 @@ XMS_UMB_SEGMENT_NR_INVALID      equ 0b2h
 @dword	equ <dword ptr>
 
 @DbgOutS macro string
-ifdef _DEBUG
+if 0;def _DEBUG
 	call printstring
 	db string
 	db 0
@@ -1692,30 +1701,40 @@ SRCBASE equ 400000h*3
 
 rmcopysx::
 	pushf
+	push cx
+	push esi
+	push edi
+
 	cli 					; no interrupts when doing protected mode
+
 	lgdt fword ptr cs:[gdt32]; load GDTR (use CS prefix here)
 if ?CATCHEXC
 	lidt fword ptr cs:[idt32]
 endif
+	.586p
+	mov eax,cr4
+	or al,10h		;enable PSE
+	mov cr4,eax
+	.386p
 	mov eax,cr0
 	mov dx,data32sel
 	inc ax			;set PE bit
 	mov cr0,eax
 	mov ds,dx
 	mov es,dx
-	.586p
-	mov eax,cr4
-	or al,10h		;enable PSE
-	mov cr4,eax
-	.386p
 
 if ?PD110000
 	mov edx,PageDir
+	bts eax,31
+	mov dword ptr [edx+0],PF_PAGE0
+	mov cr3,edx
+	mov cr0,eax
 else
 	mov edx,0
 PageDir equ dword ptr $-4
-endif
 	mov cr3,edx
+	mov dword ptr [edx+0],PF_PAGE0
+endif
 
 ;--- 4 MB page directory entries:
 ;--- bit 7: 1=4MB page
@@ -1724,11 +1743,6 @@ endif
 ;--- bit 21: 0
 ;--- bit 22-31: addressbits 22-31
 
-	push cx
-	push esi
-	push edi
-
-	mov dword ptr [edx+0],81h			;set 4MB page, present
 ;--- .3.........2.........1.........0
 ;--- 10987654321098765432109876543210
 ;--- xxxxxxxxxx?????????????????????? bits 22-31 in edi
@@ -1766,19 +1780,23 @@ endif
 @@:
 	mov [edx+16],eax
 
+ife ?PD110000
 	mov eax,cr0
 	bts eax,31
 	mov cr0,eax
+endif
 
 	shr cx,2					; get number of DWORDS to move
 	rep movs @dword [edi],[esi]
 	adc cx,cx
 	rep movs @word [edi],[esi]	; move a trailing WORD
+
 if ?RESTDSESREGS
 	mov dx,data16sel			; restore selector attributes to 64 kB
 	mov ds,dx
 	mov es,dx
 endif
+
 	mov eax,cr0
 	and eax,7ffffffeh
 	mov cr0,eax
@@ -1791,6 +1809,7 @@ endif
 if ?CATCHEXC
 	lidt fword ptr cs:[stdidt]
 endif
+
 	pop edi
 	pop esi
 	pop cx
@@ -3048,7 +3067,7 @@ done:
 isfspec:
 	push nextfcharX
 	xor dx,dx
-	mov [longarg],dl
+	mov longarg,dl
 	mov bl,1
 	mov cl,' '
 	cmp @byte [si],'-'
@@ -3056,37 +3075,29 @@ isfspec:
 	dec bx
 	inc si
 @@:
-	mov [flag],bl
+	mov flag,bl
 	cmp @byte [si],'0'
 	jne @F
 	mov cl,'0'
 	inc si
 @@:
-	mov [fill],cx
-	mov [size_],dx
+	mov fill,cx
 	mov bx,dx
-	jmp checkfordigits
-nextdigit:
-	cmp @byte [si],'9'
-	jg digitsdone
-	lodsb
-	sub al,'0'
-	cbw
-	imul cx,bx,10       ;cx = bx * 10
-	add ax,cx
-	mov bx,ax
-checkfordigits:
-	cmp @byte [si],'0'
-	jge nextdigit
-digitsdone:
-	mov [size_],bx
+	.while byte ptr [si] >= '0' && byte ptr [si] <= '9'
+		lodsb
+		sub al,'0'
+		cbw
+		imul bx,bx,10
+		add bx,ax
+	.endw
+	mov size_,bx
 	cmp @byte [si],'l'
 	jne @F
-	mov @byte [longarg],1
+	mov longarg,1
 	inc si
 @@:
 	lodsb
-	mov [fmt],si
+	mov fmt,si
 	cmp al,'x'
 	je print_x
 	cmp al,'X'
@@ -3101,12 +3112,15 @@ digitsdone:
 	je print_s
 	cmp al,'u'
 	je print_u
-	push '%'
-	jmp @F
+	and al,al
+	jnz @F
+	pop ax
+	jmp done
 print_c:
-	push @word ss:[di]
+	mov ax,ss:[di]
 	add di,2
 @@:
+	push ax
 	call print_char
 	retn
 print_x:
@@ -3119,7 +3133,7 @@ print_i:
 print_u:
 	mov bx,10
 print_number:
-	cmp @byte [longarg],0
+	cmp longarg,0
 	je @F
 	mov eax,ss:[di]
 	add di,4
@@ -3148,45 +3162,32 @@ print_s:
 
 print_string:
 	mov ax,si
+	mov bx,size_
 	.while byte ptr [si]
 		inc si
 	.endw
 	sub si,ax
 	xchg ax,si
-	sub [size_],ax
-	cmp @byte [flag],1
-	jne @@L360
-	mov bx,[size_]
-	jmp @@L363
+	sub bx,ax
+	.if flag == 1
+		.while sword ptr bx > 0
+			push fill
+			call print_char
+			dec bx
+		.endw
+	.endif
 
-fillcharloop1:
-	push [fill]
-	call print_char
-	dec bx
-@@L363:
-	or bx,bx
-	jg fillcharloop1
-	mov [size_],bx
-	jmp @@L360
+	.while byte ptr [si]
+		lodsb
+		push ax
+		call print_char
+	.endw
 
-charoutloopZ:
-	mov al,[si]
-	push ax
-	call print_char
-	inc si
-@@L360:
-	cmp @byte [si],0
-	jne charoutloopZ
-
-	mov bx,[size_]
-fillcharloop2:
-	or bx,bx
-	jle @F
-	push @word [fill]
-	call print_char
-	dec bx
-	jmp fillcharloop2
-@@:
+	.while sword ptr bx > 0
+		push fill
+		call print_char
+		dec bx
+	.endw
 	retn
 
 printf endp
