@@ -20,7 +20,7 @@ PREF66LGDT      equ 0       ;std 0, 1=use 66h prefix for LGDT
 ?LOG            equ 0       ;std 0, 1=enable /LOG option
 ?TESTMEM        equ 0       ;std 0, 1=enable /TESTMEM:ON|OFF option
 ifndef ?ALTSTRAT
-?ALTSTRAT       equ 0       ;std 0, 1=use alternate strategie for (re)alloc emb
+?ALTSTRAT       equ 0       ;std 0, 1=use alternate strategy for (re)alloc emb
 endif
 ?MERGE0HDL      equ 1       ;std 1, 1=try to merge even if handle to free has size 0
 ?HINF_MSCOMP    equ 1       ;std 1, 1=func. 0Eh (get handle info) MS Himem compatible 
@@ -1567,14 +1567,14 @@ endif
 ;--- set int 0dh, then just start to copy.
 ;--- if int 0dh is called, an exception occured, since IRQs are disabled.
 ;--- then set unreal mode inside int 0dh code.
+	pushf
+	push cs
+	push offset myint0d
 	xor dx,dx
-	mov ax,cs
+	pop eax
+	shr ecx,2				; get number of DWORDS to move
 	mov ds,dx
 	mov es,dx
-	pushf
-	shl eax,16
-	mov ax,offset myint0d
-	shr ecx,2				; get number of DWORDS to move
 	cli
 	xchg eax,ds:[13*4]
 	rep movs @dword [edi],[esi]
