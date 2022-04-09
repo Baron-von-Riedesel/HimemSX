@@ -23,7 +23,7 @@
 
   Details
   
-  Modify 7 bytes of smartdrv.exe (DOS 7.1) with a hex editor:
+  Modify 7 bytes of file smartdrv.exe (45379 bytes) with a hex editor:
 
   072C4: 09 2E FF 1E 72 0E C3    ;old
   072C4: C9 66 0F B7 D2 EB 02    ;new

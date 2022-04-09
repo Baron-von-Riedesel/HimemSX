@@ -1,0 +1,139 @@
+--- HimemSX0.asm	2020-12-18 04:24:24 +1000
++++ HimemSX.asm	2022-03-11 13:21:29 +1000
+@@ -3,9 +3,9 @@
+ 
+ ;--- assembly time parameters
+ 
+-DRIVER_VER		equ 300h+52h
+-VERSIONSTR		equ <'3.52'>
+-INTERFACE_VER	equ 350h
++DRIVER_VER		equ 300h+53h
++VERSIONSTR		equ <'3.53'>
++INTERFACE_VER	equ 351h
+ 
+ lf equ 10
+ 
+@@ -185,6 +185,11 @@
+   dest_offset   dd  ?       ; offset into destination
+ xms_move ends
+ 
++sxms_move struct
++  src_hi		db	?		; super-extend high byte of source offset
++  dest_hi		db	?		; super-extend high byte of destination offset
++sxms_move ends
++
+ ;--- int 15h, ax=E820h (documented)
+ 
+ SMAP equ 534d4150h
+@@ -1256,7 +1261,7 @@
+ ;******************************************************************************
+ ; calculates the move address
+ ; In: SI - handle (0 if EDX should be interpreted as seg:ofs value)
+-;   EDX - offset
++;   BX.EDX - offset
+ ;   ECX - length
+ ; Out:  EAX - move address in kB
+ ; Modifies: EDX, SI
+@@ -1285,10 +1290,9 @@
+ 	call xms_check_handle	;check if si holds a "used" handle
+ 
+ 	push bx
+-	xor bx,bx
+ 	mov eax,ecx 		; contains length
+ 	add eax,edx 		; assert length + offset < size    
+-	adc bx,bx
++	adc bx,0
+ 	add eax,1024-1		; round up to kB
+ 	adc bx,0
+ 	shrd eax,ebx,10		; convert to kB units
+@@ -1301,7 +1305,7 @@
+ 	shl eax,10			; convert from kb to linear
+ 	shr esi,22
+ 	add eax,edx 		; add offset into block
+-	adc si,0
++	adc si,bx
+ 	ret
+ 
+ @@wrong_size:
+@@ -1339,33 +1343,48 @@
+ 	push offset disable_a20		; and make sure it is disabled on exit       
+ @@was_enabled:
+ endif
+-	xor ax,ax					; default to error
++	cmp ah,16h					; super-extended move
++	mov ax,0					; default to error
+ 	push ecx
+ 	push edx
+ 	push eax
+ 	push bp
+ 	push bx
+ 
++	lahf
++
+ 	mov ecx,es:[si].xms_move.len	; get length
+ 	test cl,1						; is it even?
+ 	jnz @@move_invalid_length
+ 
+ 	push si
++	push ax
++	xor bx,bx
++	test ah,40h
++	jz @F
++	mov bl,es:[si+sizeof xms_move].sxms_move.dest_hi
++@@:
+ 	mov edx,es:[si].xms_move.dest_offset
+ 	mov si,es:[si].xms_move.dest_handle
+ 	call xms_get_move_addr			; get move address
+ 	mov dx,si ;save lines 32-39 in DX, since BL must be preserved
++	pop di
+ 	pop si
+ 	jc @@copy_dest_is_wrong
+-	mov bx,dx
++	test di,4000h
+ 	mov edi,eax 		; store in destination index
+-
++	push dx
++	jz @F
++	mov bl,es:[si+sizeof xms_move].sxms_move.src_hi
++@@:
+ 	mov edx,es:[si].xms_move.src_offset
+ 	mov si,es:[si].xms_move.src_handle
+ 	call xms_get_move_addr			; get move address
++	pop dx
+ 	jc @@copy_source_is_wrong
+ 	xchg eax,esi
+ 	mov bh,al
++	mov bl,dl
+ 
+ ;**************************************************
+ ; setup finished with
+@@ -2265,7 +2284,8 @@
+ 
+ 	dw xms_sext_query_free_mem	; C8 14
+ 	dw xms_sext_alloc_emb		; C9 15
+-	dw xms_sext_lock_emb		; CC 16
++	dw xms_move_emb 			; CB 16
++	dw xms_sext_lock_emb		; CC 17
+ 
+ xms_dispatcher proc
+ 	jmp short @F
+@@ -2290,15 +2310,17 @@
+ 	jz @@ok3
+ 	cmp al,0C8h/2		; C8-C9?
+ 	jz @@ok4
++	cmp ah,0CBh 		; CB?
++	jz @@ok5
+ 	cmp ah,0CCh			; CC?
+ 	jz @@ok5
+ 	xor ax,ax			; everything else fails
+ 	mov bl,XMS_NOT_IMPLEMENTED
+ 	jmp @@dispatcher_end
+ @@ok5:
+-	sub ah,2            ; CC    -> CA
++	dec ah				; CB-CC -> CA-CB
+ @@ok4:
+-	sub ah,0C8h-14h		; C8-CA -> 14-16
++	sub ah,0C8h-14h 	; C8-CB -> 14-17
+ 	jmp @@ok1
+ @@ok3:
+ 	sub ah,4			; 8E-8F -> 8A-8B

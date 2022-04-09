@@ -1,6 +1,11 @@
 
   History
 
+  09.04.2022: v3.53
+  - implements interface v3.51. This adds a new block move function,
+    selected with AH=0CBh, to the XMM. This new function allows to 
+    set 40-bit offsets for the source or destination addresses.
+    Done by Jason Hood.
   17.12.2020: v3.52
   - set RW page flag for page 0, else, if CR0.WP is set, a reboot occurs.
   11.12.2020: v3.51

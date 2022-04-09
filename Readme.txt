@@ -32,6 +32,8 @@
   - The 'move extended memory' function 0Bh understands 32-bit offsets only.
     So if a memory block is larger than 4 GB, you can't use this function to
     copy memory beyond a 4 GB offset.
+     Since version 3.53, there's an additional block move function available,
+    that overcomes this limitation. See XMS35.txt for details.
   - if no super-extended memory is found, or the CPU doesn't support PSE-36
     paging, HimemSX will still load and behave like a v3 XMM. However, it
     searches for extended memory via Int 15h, ax=e820h only, without trying to
