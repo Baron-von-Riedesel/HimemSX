@@ -3,8 +3,8 @@
 
 ;--- assembly time parameters
 
-DRIVER_VER		equ 300h+53h
-VERSIONSTR		equ <'3.53'>
+DRIVER_VER		equ 300h+54h
+VERSIONSTR		equ <'3.54'>
 INTERFACE_VER	equ 351h
 
 lf equ 10
@@ -31,8 +31,8 @@ ifdef _DEBUG
 else
 ?CATCHEXC       equ 0
 endif
-?RESTDSESREGS   equ 1       ;restore segment registers from unreal mode
-?RESTCSREG      equ 1       ;restore CS seg after sx pmode - shouldn't be necessary, but apparently is...
+?RESTDSESREGS   equ 1       ;std 1, 1=restore DS/ES limits to 64kB after copy in sx pmode
+?RESTCSREG      equ 1       ;std ?, 1=restore CS seg after sx pmode - shouldn't be necessary, but apparently is...
 
 if ?RESTDSESREGS or ?CATCHEXC
 ;--- if DS+ES is to be restored to 64kB before leaving protected-mode,
@@ -185,7 +185,10 @@ xms_move struct
   dest_offset   dd  ?       ; offset into destination
 xms_move ends
 
+;--- structure for XMS AH=0CBh (documented structure)
+
 sxms_move struct
+                xms_move <?>
   src_hi		db	?		; super-extend high byte of source offset
   dest_hi		db	?		; super-extend high byte of destination offset
 sxms_move ends
@@ -1317,7 +1320,7 @@ xms_get_move_addr endp
 
 ;******************************************************************************
 ; moves an EMB
-; In:   AH=0bh
+; In:   AH=0bh or 16h
 ;   ES:SI=pointer to XMS move structure (DS is DGROUP)
 ; Out:  AX=1 if successful
 ;   AX=0 if not successful
@@ -1362,7 +1365,7 @@ endif
 	xor bx,bx
 	test ah,40h
 	jz @F
-	mov bl,es:[si+sizeof xms_move].sxms_move.dest_hi
+	mov bl,es:[si].sxms_move.dest_hi
 @@:
 	mov edx,es:[si].xms_move.dest_offset
 	mov si,es:[si].xms_move.dest_handle
@@ -1375,7 +1378,7 @@ endif
 	mov edi,eax 		; store in destination index
 	push dx
 	jz @F
-	mov bl,es:[si+sizeof xms_move].sxms_move.src_hi
+	mov bl,es:[si].sxms_move.src_hi
 @@:
 	mov edx,es:[si].xms_move.src_offset
 	mov si,es:[si].xms_move.src_handle
@@ -2072,6 +2075,7 @@ endif
 
 @@ext_growing:
 ; growing, try to allocate a new block
+; new size in kB in EDX
 
 	mov ah,11h				;11h is xms_ext_alloc_emb #
 	test word ptr [si].XMS_HANDLE.xh_baseK+2, 0FFC0h
@@ -2087,25 +2091,44 @@ endif
 	pop si				; get old handle
 	push si
 
-; transfer old handle data to new location
+; transfer old handle data to new location.
+; v3.54: since the block may be > 4G and max amount to copy is 4G-2,
+; the transfer is done with max. 2G chunks.
 
 	xor edi,edi
+	push di				; src+dst hibytes
 	push edi			; dst.offset
 	push dx				; dst.handle
 	push edi			; src.offset
 	push si				; src.handle
-	mov edi,[si].XMS_HANDLE.xh_sizeK
-	shl edi,10			; K to byte
+	mov ecx,[si].XMS_HANDLE.xh_sizeK
+next2g:
+	mov edi, ecx
+	test ecx, 0ffe00000h		;remaining more than 2G?
+	jz @F
+	mov edi, 80000000h shr 10	;load edi with 2G (in K)
+@@:
+	shl edi, 10			; K to byte
 	push edi			; length
-	mov si,sp
+	mov si, sp
 	push ss
 	pop es				; es:si -> xms_move
+	mov ah, 16h			; always use sext move
 	call xms_move_emb
-	add sp, sizeof xms_move
+	pop edi				; get size of current chunk in edi
 	push cs				; xms_move_emb eats critical ds value
 	pop ds
+	mov si, sp
+	add ss:[si-4].sxms_move.src_offset, edi	; adjust src and dest offsets
+	adc ss:[si-4].sxms_move.src_hi, 0		; including bits 32-39
+	add ss:[si-4].sxms_move.dest_offset, edi
+	adc ss:[si-4].sxms_move.dest_hi, 0
+	shr edi, 10
+	sub ecx, edi
+	jnz next2g
+	add sp, sizeof sxms_move - 4
 
-	pop si
+	pop si              ; restore handle
 	push si
 
 ; swap handle data so handle pointers remain valid
