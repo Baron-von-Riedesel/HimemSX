@@ -2093,7 +2093,9 @@ endif
 
 ; transfer old handle data to new location.
 ; v3.54: since the block may be > 4G and max amount to copy is 4G-2,
-; the transfer is done with max. 2G chunks.
+; the transfer is done with chunks of max. 4G - 1K.
+
+MAXCHUNK equ 4096 * 1024 - 1
 
 	xor edi,edi
 	push di				; src+dst hibytes
@@ -2102,11 +2104,11 @@ endif
 	push edi			; src.offset
 	push si				; src.handle
 	mov ecx,[si].XMS_HANDLE.xh_sizeK
-next2g:
+nextchk:
 	mov edi, ecx
-	test ecx, 0ffe00000h		;remaining more than 2G?
-	jz @F
-	mov edi, 80000000h shr 10	;load edi with 2G (in K)
+	cmp ecx, MAXCHUNK	;remaining more than max.?
+	jb @F
+	mov edi, MAXCHUNK	;load edi with 4G-1K
 @@:
 	shl edi, 10			; K to byte
 	push edi			; length
@@ -2125,7 +2127,7 @@ next2g:
 	adc ss:[si-4].sxms_move.dest_hi, 0
 	shr edi, 10
 	sub ecx, edi
-	jnz next2g
+	jnz nextchk
 	add sp, sizeof sxms_move - 4
 
 	pop si              ; restore handle
