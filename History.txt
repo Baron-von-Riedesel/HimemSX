@@ -1,7 +1,7 @@
 
   History
 
-  __.__.2022: v3.54
+  12.04.2022: v3.54
   - reallocating super-extended memory blocks did loose data if
     the block's old size was > 4 GB and had to be moved ( that is,
     the block's size was increased and there was not enough free space
