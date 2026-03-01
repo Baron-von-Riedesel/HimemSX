@@ -3,8 +3,8 @@
 
 ;--- assembly time parameters
 
-DRIVER_VER		equ 300h+54h
-VERSIONSTR		equ <'3.54'>
+DRIVER_VER		equ 300h+55h
+VERSIONSTR		equ <'3.55'>
 INTERFACE_VER	equ 351h
 
 lf equ 10
@@ -15,7 +15,10 @@ endif
 MAXHANDLES      equ 128     ;std 128, max. number of handles
 ALLOWDISABLEA20 equ 1       ;std 1, 1=allow to disable A20
 BLOCKSIZE       equ 2000h   ;std 2000h, block size moved to/from ext. memory (max is 65535!)
-USEUNREAL       equ 1       ;std 1, 1=use "unreal" mode for EMB copy
+ifndef USEUNREAL
+USEUNREAL       equ 2       ;std 2, 0=use pmode; 1=set/reset "unreal" mode; 2=set unreal mode if GPF occurs
+endif
+DISABLEIRQS     equ USEUNREAL ne 2 ;0=don't disable interrupts during block move in unreal mode.
 PREF66LGDT      equ 0       ;std 0, 1=use 66h prefix for LGDT
 ?LOG            equ 0       ;std 0, 1=enable /LOG option
 ?TESTMEM        equ 0       ;std 0, 1=enable /TESTMEM:ON|OFF option
@@ -31,7 +34,8 @@ ifdef _DEBUG
 else
 ?CATCHEXC       equ 0
 endif
-?RESTDSESREGS   equ 1       ;std 1, 1=restore DS/ES limits to 64kB after copy in sx pmode
+;?RESTDSESREGS   equ 1       ;std 1, 1=restore DS/ES limits to 64kB after copy in sx pmode
+?RESTDSESREGS   equ USEUNREAL ne 2 ; 1=restore DS/ES limits to 64kB after copy in sx pmode
 ?RESTCSREG      equ 1       ;std ?, 1=restore CS seg after sx pmode - shouldn't be necessary, but apparently is...
 
 if ?RESTDSESREGS or ?CATCHEXC
@@ -1431,7 +1435,16 @@ endif
 @@move_ok_to_start:
 	SMSW AX 					; don't use priviledged "mov eax,cr0"!
 	test al,1					; are we already in PM?
+if DISABLEIRQS eq 0
+	jnz pm_copy
+	and bx, bx		;paging needed? ( then no unreal-mode possible )
+	jnz @F
+	call bp			;unreal mode - interrupts enabled, do copy in ONE step!
+	jmp @@xms_exit_copy
+pm_copy:
+else
 	jz @F
+endif
 ;	cmp bx,0
 ;	jnz @@copy_invalid_handle
 	mov bp,offset pmcopy		; yes, use INT 15h, ah=87h
@@ -1505,15 +1518,19 @@ endif
 ;  EDI = dst linear adress
 ;  ECX = length (hiword cleared)
 
-;  2 strategies are implemented. The first does the move in protected-mode,
-;  the latter activates "unreal" mode and does the move there.
-;  After the last transfer "unreal" mode is exited. Interrupts occuring
-;  during the "interrupt window" will run in "unreal" mode as well, but
-;  this shouldn't hurt.
+;  3 approaches are implemented:
+;  1) the move is done in protected-mode,
+;  2) "unreal" mode is activated, move the block,
+;     after the last transfer "unreal" mode is reset. Interrupts occuring
+;     during the "interrupt window" will run in "unreal" mode as well, but
+;     this shouldn't hurt.
+;  3) it's assumed "unreal" mode is active; transfer starts, if an INT 0Dh
+;     occurs, it's checked if it is a GPF or an IRQ. If it's a GPF, unreal
+;     mode is set. It's never reset.
 
 rmcopy:
 
-ife USEUNREAL
+if USEUNREAL eq 0
 
 	pushf
 	cli 					; no interrupts when doing protected mode
@@ -1545,8 +1562,8 @@ endif
 	clc
 	ret
 
-else
-  if 0
+elseif USEUNREAL eq 1
+
 	pushf
 	cli 					; no interrupts during the block move
 	pushf
@@ -1560,7 +1577,7 @@ else
 	adc cx,cx
 	rep movs @word [edi],[esi]	 ; move a trailing WORD
 	popf
-	jnz @F
+	jnz @F		;last block?
 	call reset_ureal
 @@:
 	popf
@@ -1569,9 +1586,9 @@ else
 reset_ureal:    
 	mov dx,data16sel
 set_ureal:
-if PREF66LGDT
+  if PREF66LGDT
 	db 66h					; load full 32bit base
-endif
+  endif
 	lgdt fword ptr cs:[gdt32]; load GDTR (use CS prefix here)
 	mov eax,cr0
 	inc ax					; set PE bit
@@ -1585,30 +1602,75 @@ endif
 	mov es,dx
 	mov cr0,eax
 	ret
-  else
-;--- set int 0dh, then just start to copy.
-;--- if int 0dh is called, an exception occured, since IRQs are disabled.
-;--- then set unreal mode inside int 0dh code.
+
+else ;USEUNREAL
+
+;--- set int 0dh, then start copying.
+;--- if int 0dh is triggered, check PIC to see if it's an IRQ;
+;--- if no, it's an exception and unreal mode is activated.
+	mov ax,cs
+	shl eax,16
+  if DISABLEIRQS eq 0  ;copy full block?
+	mov dx, offset myint0d_2   ; no check for IRQ 5 in INT 0Dh
 	pushf
-	push cs
-	push offset myint0d
+	pop ax
+	test ah,2  ; IF set?
+	jz ifdone  ; no check if interrupts disabled
+	mov al,0Bh
+	out 20h,al
+	jmp @F
+@@:
+	in al,20h  ; get ISS
+	test al,20h;IRQ 5 in service?
+	jnz ifdone
+	mov dx, offset myint0d
+ifdone:
+	mov ax, dx
+  else
+	mov ax, offset myint0d
+  endif
+
+  if DISABLEIRQS
+	pushf
+  endif
 	xor dx,dx
-	pop eax
-	shr ecx,2				; get number of DWORDS to move
+	shr ecx,2		; get number of DWORDS to move
 	mov ds,dx
 	mov es,dx
+  if DISABLEIRQS
 	cli
+  endif
 	xchg eax,ds:[13*4]
-	rep movs @dword [edi],[esi]
+	rep movsd [edi],[esi]
 	adc cx,cx
-	rep movs @word [edi],[esi]	 ; move a trailing WORD
+	rep movsw [edi],[esi]	; move a trailing WORD
 	mov ds:[13*4],eax		; restore int 0dh
+  if DISABLEIRQS
 	popf
+  endif
 	ret
 myint0d:
+  if DISABLEIRQS eq 0
+	push ax
+;--- if IRQs aren't disabled, check if an IRQ 5 is "in service"; 
+;--- if no, assume it's an exception;
+;--- this is the MS Himem way of doing things; 
+;--- problem: XMS block moves inside an IRQ 5 handler may crash.
+	mov al,0Bh
+	out 20h,al
+	jmp @F
+@@:
+	in al,20h
+	test al,20h	;IRQ 5 in service?
+	pop ax
+	jz myint0d_2
+	push eax    ;assume eax holds old int 0Dh vector
+	retf
+myint0d_2:
+  endif
+	push eax
 	push ds
 	push es
-	push eax
 	lgdt fword ptr cs:[gdt32]; load GDTR (use CS prefix here)
 	mov eax,cr0
 	inc ax					; set PE bit
@@ -1620,13 +1682,12 @@ myint0d:
 	mov ds,dx
 	mov es,dx
 	mov cr0,eax
-	pop eax
 	pop es
 	pop ds
+	pop eax
 	iret
-  endif
-endif
 
+endif ;USEUNREAL
 
 ;------------------------------------------------------------------------
 ; cpu is in v86-mode, use int15, ah=87 to copy things around
@@ -1983,7 +2044,9 @@ xms_get_handle_info proc
 
 	push cx
 	push edx
+ife ?HINF_MSCOMP
 	pop dx
+endif
 	@DbgOutS <"xms_get_handle_info enter",13,10>
 
 	call xms_ext_get_handle_info
@@ -1996,23 +2059,25 @@ xms_get_handle_info proc
 @@:
 	mov bl,cl
 
-;--- MS Himem: if size > 0xffff, return error BL=A2h
+	cmp edx,010000h				; dx <= 0xffff?
+	jc @@handle_size_ok
 if ?HINF_MSCOMP
-	cmp edx,010000h				; dx must be <= 0xffff
-	jc @F
-	mov bl,XMS_INVALID_HANDLE
-	dec ax
+;--- error if size > 0xffff (MS Himem compatible)
+	mov bl,XMS_INVALID_HANDLE	; bl=A2h
+	dec ax                      ; ax=0
 	jmp @@get_handle_info_err
 else
-	cmp edx,010000h				; dx = min(edx,0xffff);
-	jb @F
-	mov dx,0ffffh
+	mov dx,0ffffh				; dx = min(edx,0xffff);
 endif
-@@:
-
+@@handle_size_ok:
+if ?HINF_MSCOMP    ;SP ->edx,cx
+	add sp,2       ;skip loword(edx)
+	push dx        ;push new loword(edx)
+endif
 @@get_handle_info_err:
-
-	push dx
+ife ?HINF_MSCOMP   ;SP ->hiword(edx),cx
+	push dx        ;push new loword(edx)
+endif
 	pop edx
 	pop cx
 	ret

@@ -1,6 +1,10 @@
 
   History
 
+  01.03.2026: v3.55
+  - if unreal-mode is used, block moves are done with interrupts enabled.
+  - fixed AH=0Eh function (get handle info): return DX unchanged if error
+    A2h (invalid handle) was returned due to EMB size > 65535 kB.
   12.04.2022: v3.54
   - reallocating super-extended memory blocks did loose data if
     the block's old size was > 4 GB and had to be moved ( that is,
